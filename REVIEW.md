@@ -169,6 +169,24 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🐞 P0 (รอบ 4): `nix develop` exit 1 — flake อยู่ใน git repo
+
+หลังเซลล์ setup `chdir` เข้า `/content/Colab` (ซึ่งเป็น git repo) `write_flake()` จึงเขียน `flake.nix` ที่รากรีโป
+แต่ไฟล์นั้นถูก `.gitignore` ไว้ = **untracked** → Nix มองไม่เห็น (`path ... is not tracked by Git`) และเพราะ
+`activate_devshell()` กลืน stderr ทิ้ง ผู้ใช้จึงเห็นแค่ `exit status 1`
+
+- `FLAKE_DIR = $STRATA_HOME/flake` (นอก repo) — `write_flake()` เขียนที่นั่น, เก็บกวาด `flake.nix`/`default.nix`
+  ที่เคยสร้างใน cwd (เฉพาะไฟล์ที่มี marker `Strata Studio devshell`, ไม่แตะ flake ของผู้ใช้)
+- `activate_devshell()` ใช้ `subprocess.run(capture_output=True)` แล้ว raise ข้อความที่มี **15 บรรทัดท้ายของ stderr**
+  + วิธีแก้ 3 ข้อ; สำเร็จแล้วคืน `{"flake_dir", "vars"}`
+- `nix_diagnostics()` รวม `nix --version`, `experimental-features`, การมี `/nix/store`, ที่อยู่ flake —
+  `ensure_environment()` พิมพ์ให้อัตโนมัติเมื่อ devshell ล้ม และคืน `flake_dir` ใน dict สรุป
+- `config._default_home()`: ใช้ `/content` เมื่อมี (Colab) ไม่งั้น `~/.strata` (เครื่อง dev ไม่ต้องมีสิทธิ์เขียน `/`)
+- เทสต์: `flake lives outside git repo` (เขียนนอก repo + ลบของเดิม + ไม่แตะไฟล์ผู้ใช้), `nix develop error surfacing`
+  (แนบ stderr/hint, merge PATH/env สำเร็จ)
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

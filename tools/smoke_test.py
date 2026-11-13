@@ -817,6 +817,91 @@ def test_branch_autodetect() -> None:
     assert 'REPO_SLUG = REPO_SLUG or _found_slug or DEFAULT_SLUG' in src, "ต้องเติม REPO_SLUG อัตโนมัติ"
 
 
+def test_flake_outside_git_repo() -> None:
+    """flake ต้องอยู่นอก git repo (nix ไม่เห็นไฟล์ที่ยังไม่ถูก track) และต้องเก็บกวาดของเดิมใน cwd"""
+    from strata import bootstrap as bs
+
+    tmp = Path(tempfile.mkdtemp())
+    old_cwd, old_dir = Path.cwd(), bs.FLAKE_DIR
+    try:
+        repo = tmp / "repo"
+        repo.mkdir()
+        (repo / "flake.nix").write_text(bs.render_flake("org/old"), encoding="utf-8")  # ของที่เราเคยเขียน
+        (repo / "default.nix").write_text(bs.render_flake("org/old"), encoding="utf-8")
+        flake_dir = tmp / "flake"
+        os.chdir(repo)
+        bs.FLAKE_DIR = flake_dir
+        out = bs.write_flake("org/repo")
+
+        assert out.parent == flake_dir, f"flake ต้องถูกเขียนนอก repo: {out}"
+        assert not (repo / "flake.nix").exists(), "ต้องลบ flake.nix ที่เคยเขียนไว้ใน cwd"
+        assert not (repo / "default.nix").exists(), "ต้องลบ default.nix ที่เคยเขียนไว้ใน cwd"
+        text = out.read_text(encoding="utf-8")
+        assert "org/repo" in text and bs.NIXPKGS_REV in text, "เนื้อหา flake ไม่ถูกต้อง"
+
+        # flake.nix ของผู้ใช้เอง (เนื้อหาต่างจากที่เราสร้าง) ต้องไม่ถูกลบ
+        mine = repo / "flake.nix"
+        mine.write_text("{ /* ของผู้ใช้ */ }\n", encoding="utf-8")
+        bs.write_flake("org/repo")
+        assert mine.exists(), "ห้ามลบ flake.nix ที่ผู้ใช้เขียนเอง"
+    finally:
+        os.chdir(old_cwd)
+        bs.FLAKE_DIR = old_dir
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_activate_devshell_errors() -> None:
+    """`nix develop` ล้มต้องบอก stderr + วิธีแก้ (เดิมกลืน stderr จน debug ไม่ได้)"""
+    from strata import bootstrap as bs
+
+    tmp = Path(tempfile.mkdtemp())
+    real_run, real_env = bs.subprocess.run, dict(os.environ)
+    try:
+        (tmp / "flake.nix").write_text("{}", encoding="utf-8")
+
+        def fail(cmd, **kw):  # noqa: ANN001
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "error: path '/content/Colab/flake.nix' is not tracked by Git\n"
+
+            assert "nix" in cmd and str(tmp) in cmd, f"ต้องเรียก nix develop ที่ flake dir: {cmd}"
+            assert "DEVNULL" not in str(kw), "ห้ามกลืน stderr"
+            return R()
+
+        bs.subprocess.run = fail
+        try:
+            bs.activate_devshell(tmp)
+        except RuntimeError as exc:
+            msg = str(exc)
+            assert "not tracked by Git" in msg, f"ต้องแนบ stderr ท้ายข้อความ: {msg}"
+            assert "nix develop" in msg and "/etc/nix/nix.conf" in msg, f"ต้องมีวิธีแก้: {msg}"
+        else:
+            raise AssertionError("ควร raise เมื่อ nix develop ล้ม")
+
+        # สำเร็จ -> env ต้องถูก merge และคืนสรุปได้
+        def ok(cmd, **kw):  # noqa: ANN001
+            class R:
+                returncode = 0
+                stderr = ""
+                stdout = json.dumps({"PATH": "/nix/store/abc/bin", "LD_LIBRARY_PATH": "/nix/store/lib", "FOO": "bar"})
+
+            return R()
+
+        bs.subprocess.run = ok
+        info = bs.activate_devshell(tmp)
+        assert info["flake_dir"] == str(tmp), f"คืนค่าไม่ถูก: {info}"
+        assert "/nix/store/abc/bin" in os.environ["PATH"], "PATH ต้องมีของ devshell"
+        assert "/usr/local/bin" in os.environ["PATH"], "PATH เดิมต้องยังอยู่"
+        assert os.environ["FOO"] == "bar", "ต้อง merge env อื่นด้วย"
+        assert bs.nix_diagnostics()["flake_dir"] == str(bs.FLAKE_DIR), "diagnostics ต้องรายงาน flake dir"
+    finally:
+        bs.subprocess.run = real_run
+        os.environ.clear()
+        os.environ.update(real_env)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -842,6 +927,8 @@ def main() -> int:
     check("branch auto-detect", test_branch_autodetect)
     check("package files tracked by git", test_package_files_tracked)
     check("flake.nix from embedded template", test_flake_template)
+    check("flake lives outside git repo", test_flake_outside_git_repo)
+    check("nix develop error surfacing", test_activate_devshell_errors)
     if FAILURES:
         print(f"\n❌ ล้มเหลว {len(FAILURES)} รายการ")
         return 1
