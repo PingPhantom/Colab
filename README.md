@@ -30,6 +30,18 @@
 3. รันเซลล์ **2) เปิด Studio UI** — เปิด UI ที่พอร์ต `18080` (ไม่ชนกับพอร์ต 8080 ของ Colab)
 4. แท็บแรก → กด **📥 โหลด** โมเดลที่ต้องการ → **🚀 รัน & แชท** → ไปคุยที่แท็บ 2
 
+> **เจอ `ModuleNotFoundError: No module named 'strata'` อยู่?**
+> แปลว่าเซลล์ที่รันเป็นเวอร์ชันก่อนแยกแพ็กเกจ (เซลล์ใหม่จะมีข้อความ `🧩 strata notebook v3-auto-clone`)
+> ปิด runtime แล้วเปิด notebook ใหม่จากลิงก์ด้านล่าง หรือถ้าอยากใช้เซสชันเดิมต่อ ให้วาง 3 บรรทัดนี้ในเซลล์ใหม่:
+>
+> ```python
+> %cd /content
+> !git clone --depth 1 --branch arena/e076c6f4-colab https://github.com/PingPhantom/Colab.git Colab 2>/dev/null || git -C Colab pull --ff-only
+> import os, sys; os.chdir("/content/Colab"); sys.path.insert(0, "/content/Colab")
+> ```
+>
+> แล้วรันเซลล์ 1 ต่อได้เลย (ขั้นตอนที่ทำไปแล้วจะถูกข้าม)
+
 > ยังไม่ merge PR? เปิด notebook จาก branch ได้เลย:
 > `https://colab.research.google.com/github/PingPhantom/Colab/blob/arena/e076c6f4-colab/nix.ipynb`
 > หรือเว้น `REPO_BRANCH` ว่าง = ใช้ branch หลัก (ต้อง merge ก่อนจึงจะมีแพ็กเกจ `strata/`)

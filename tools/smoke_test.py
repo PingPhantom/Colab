@@ -489,7 +489,8 @@ def test_notebook_repo_bootstrap() -> None:
     src = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
     tree = ast.parse(src)
     node = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_ensure_repo"), None)
-    assert node is not None, "ไม่พบฟังก์ชัน _ensure_repo ในเซลล์ setup"
+    assert node is not None, "ไม่พบฟังก์ชัน _ensure_repo ในเซลล์ setup (โหลดเซลล์เก่าอยู่?)"
+    assert "NOTEBOOK_REV" in src, "เซลล์ setup ต้องมี marker NOTEBOOK_REV ให้เดาเวอร์ชันได้"
 
     if Path("/content").exists():
         raise Skip("มี /content อยู่ในเครื่องนี้ (จำลอง Colab ไม่ได้)")
