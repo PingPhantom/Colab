@@ -16,6 +16,7 @@
 - **เลือก quant อัตโนมัติ** — อ่านจำนวน layer จริงจากหัวไฟล์ GGUF แล้วคำนวณ `--n-gpu-layers` ให้พอดี VRAM
 - **StrataRAG** — chunk ตามประโยค, กันข้อมูลซ้ำ, ค้นหาแบบ cosine + `min_score`, บันทึก/โหลดคลังเป็น `.npz`
 - **UI 4 แท็บ** — โมเดล&ดิสก์ • แชท+RAG • คลัง PDF • เปรียบเทียบหลายโมเดล (Arena)
+- **วัดความเร็วเน็ต DL/UL** — แสดงในหัว UI (⬇/⬆ พร้อมยอดรวม) และเปิดแผงวัดเรียลไทม์ (อัปเดตทุก 1 วิ) ในแท็บ 1
 - **API แบบ OpenAI-compatible** ที่ `http://127.0.0.1:18080/v1`
 - **ไม่แตะไฟล์ระบบของ Colab** — ใช้ symlink แทนการลบ, ตรวจสคริปต์ติดตั้ง Nix ก่อนรัน, แตก archive อย่างปลอดภัย
 
@@ -71,6 +72,14 @@ print(client.chat.completions.create(
 ).choices[0].message.content)
 
 stop_strata_server()
+```
+
+```python
+from strata.utils import net_bandwidth, _fmt_rate
+
+net = net_bandwidth()                      # อ่านจาก /proc/net/dev (Linux/Colab)
+print(f"⬇ {_fmt_rate(net['down_bps'])} ⬆ {_fmt_rate(net['up_bps'])}"
+      f" (รวม ⬇{net['rx_bytes'] / 1024**2:.0f} MB)")
 ```
 
 ```python

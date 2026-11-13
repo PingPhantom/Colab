@@ -172,6 +172,20 @@ def main() -> int:
 
             check("ปุ่มในแถวโมเดลทำงานถูก", check_row_actions)
 
+            def check_network_widgets():
+                header = next(
+                    w for w in walk(displayed["root"]) if isinstance(w, widgets.HTML) and "Strata Studio (Port" in str(w.value)
+                )
+                assert "⬇" in header.value and "⬆" in header.value, "header ต้องแสดง DL/UL"
+                btn = next(b for b in all_w if isinstance(b, widgets.Button) and "วัดเน็ต" in b.description)
+                assert btn.description == "📶 วัดเน็ตเรียลไทม์"
+                btn.click()
+                assert "หยุด" in btn.description, f"กดเริ่มแล้วปุ่มควรเปลี่ยนเป็นหยุด ได้ {btn.description}"
+                btn.click()
+                assert "หยุด" not in btn.description, f"กดหยุดแล้วปุ่มควรกลับมา ได้ {btn.description}"
+
+            check("แสดง DL/UL ใน header + ปุ่มวัดเรียลไทม์", check_network_widgets)
+
             def check_rag_persistence():
                 path_in = next(w for w in walk(displayed["root"]) if isinstance(w, widgets.Text) and w.description == "ไฟล์คลัง:")
                 path_in.value = str(rag_path)

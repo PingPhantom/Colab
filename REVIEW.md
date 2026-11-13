@@ -80,6 +80,14 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 📶 เพิ่มเติมตามคำขอ: Network bandwidth (DL/UL)
+
+- `strata/utils.py` — `NetworkMonitor` (คำนวณความเร็วจาก delta ของ `/proc/net/dev`, ทนตัวนับรีเซ็ต), `net_bandwidth()`, `_fmt_rate()` (`812 KB/s`, `4.21 MB/s`)
+- `strata/ui.py` — ชิป ⬇/⬆ ในหัว UI (มี tooltip ยอดรวม) และแผงวัดเรียลไทม์ในแท็บ 1 (ปุ่ม 📶 เปิด/หยุด, thread อัปเดตทุก 1 วิ, ปิดเองเมื่อกดหยุด/kernel ตาย)
+- เทสต์: `tools/smoke_test.py::test_network_monitor` (delta/รีเซ็ต/ฟอร์แมต) และ `tools/ui_smoke_test.py` (ชิปใน header + toggle เปิด/ปิด)
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

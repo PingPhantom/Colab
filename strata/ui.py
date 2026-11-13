@@ -5,6 +5,7 @@ import glob
 import html as html_lib
 import re
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -43,7 +44,14 @@ from .server import (
     strata_server_status,
     switch_strata_model,
 )
-from .utils import _dir_stats, _fmt_bytes, _invalidate_dir_cache
+from .utils import (
+    NetworkMonitor,
+    _dir_stats,
+    _fmt_bytes,
+    _fmt_rate,
+    _invalidate_dir_cache,
+    net_bandwidth,
+)
 
 
 def _fmt_reply_html(raw: str, docs: list[dict] | None = None) -> str:
@@ -81,7 +89,14 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
         spb = f"<span style='background:#3b0764;color:#e9d5ff;padding:3px 9px;border-radius:99px;font-size:12px;'>{html_lib.escape(SPEC_STATE['active_label'])}</span>" if on and not SPEC_STATE["active_label"].startswith("⏹️") else ""
         rb = f"<span style='background:#1e3a8a;color:#93c5fd;padding:3px 9px;border-radius:99px;font-size:12px;'>📚 RAG: {len(rag_engine.chunks)}</span>"
         gb = f"🎮 {hw['gpu_name']} ({hw['vram_free_gb']:.1f}/{hw['vram_total_gb']:.1f}GB)" if hw["has_gpu"] else "🖥️ CPU"
-        return f"<div style='background:#0f172a;color:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid #334155;font-family:sans-serif;margin-bottom:6px;'><div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;'><b style='font-size:15px;'>🎛️ Strata Studio (Port {port} • 10 Models + Draft/MTP/N-gram + RAG)</b><div>{sb} {spb} {rb} <span style='font-size:12px;color:#38bdf8;margin-left:4px;'>{gb}</span></div></div><div style='font-size:12px;color:#cbd5e1;margin-bottom:4px;'>💾 ดิสก์ว่าง <b style='color:{bc};'>{fg:.2f} GB</b> / {tg:.2f} GB ({pct:.1f}%)</div><div style='width:100%;background:#1e293b;height:8px;border-radius:99px;overflow:hidden;'><div style='width:{pct:.1f}%;background:{bc};height:100%;'></div></div></div>"
+        net = net_bandwidth()
+        nb = (
+            "<span style='background:#0c4a6e;color:#7dd3fc;padding:3px 9px;border-radius:99px;font-size:12px;'"
+            f" title='รวมทั้งหมด — ดาวน์โหลด {_fmt_bytes(net['rx_bytes'])} • อัปโหลด {_fmt_bytes(net['tx_bytes'])}'>"
+            f"⬇ {_fmt_rate(net['down_bps'])} · ⬆ {_fmt_rate(net['up_bps'])}"
+            "</span>"
+        )
+        return f"<div style='background:#0f172a;color:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid #334155;font-family:sans-serif;margin-bottom:6px;'><div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;'><b style='font-size:15px;'>🎛️ Strata Studio (Port {port} • 10 Models + Draft/MTP/N-gram + RAG)</b><div>{sb} {spb} {rb} {nb} <span style='font-size:12px;color:#38bdf8;margin-left:4px;'>{gb}</span></div></div><div style='font-size:12px;color:#cbd5e1;margin-bottom:4px;'>💾 ดิสก์ว่าง <b style='color:{bc};'>{fg:.2f} GB</b> / {tg:.2f} GB ({pct:.1f}%)</div><div style='width:100%;background:#1e293b;height:8px;border-radius:99px;overflow:hidden;'><div style='width:{pct:.1f}%;background:{bc};height:100%;'></div></div></div>"
 
     def _draft_opts() -> list[tuple[str, str]]:
         opts = []
@@ -119,6 +134,55 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
 
     rows_box = widgets.VBox(layout=_L(gap="6px", margin="6px 0"))
     log_out = widgets.Output(layout=_L(border="1px solid #334155", border_radius="8px", padding="8px", max_height="240px", overflow_y="auto"))
+
+    # --- แผงวัดความเร็วเน็ต (DL/UL) แบบเรียลไทม์ ---
+    net_out = widgets.HTML("<div style='font-size:12px;color:#64748b;'>📶 กดปุ่มเพื่อเริ่มวัดความเร็วเน็ตแบบเรียลไทม์ (อัปเดตทุก 1 วิ)</div>")
+    b_net = _B("📶 วัดเน็ตเรียลไทม์", "", "165px")
+    net_state: dict = {"run": False, "mon": NetworkMonitor()}
+
+    def _net_card(mon: NetworkMonitor) -> str:
+        sample = mon.sample()
+        bar = min(100.0, sample["down_bps"] / (20 * 1024**2) * 100) if sample["down_bps"] else 0.0
+        return (
+            "<div style='font-family:sans-serif;background:#0f172a;color:#f8fafc;border:1px solid #334155;"
+            "border-radius:8px;padding:8px 10px;font-size:12px;'>"
+            f"<b style='color:#7dd3fc;'>⬇ {_fmt_rate(sample['down_bps'])}</b> · "
+            f"<b style='color:#fcd34d;'>⬆ {_fmt_rate(sample['up_bps'])}</b>"
+            f"<span style='color:#64748b;'> | รวม ⬇ {_fmt_bytes(sample['rx_bytes'])} • ⬆ {_fmt_bytes(sample['tx_bytes'])}</span>"
+            "<div style='background:#1e293b;height:6px;border-radius:99px;margin-top:6px;overflow:hidden;'>"
+            f"<div style='width:{bar:.1f}%;background:#38bdf8;height:100%;'></div></div></div>"
+        )
+
+    def _net_reset_button():
+        try:
+            b_net.description = "📶 วัดเน็ตเรียลไทม์"
+            b_net.button_style = ""
+        except Exception:
+            pass
+
+    def _net_loop():
+        mon = net_state["mon"]
+        mon.reset()
+        while net_state["run"]:
+            try:
+                net_out.value = _net_card(mon)
+            except Exception:
+                break
+            time.sleep(1.0)
+        net_state["run"] = False
+        _net_reset_button()
+
+    def _toggle_net(_):
+        if net_state["run"]:
+            net_state["run"] = False       # ลูปจะจบเองภายใน ~1 วิ (ปุ่มกลับเป็นสถานะเริ่มทันที)
+            _net_reset_button()
+            return
+        net_state["run"] = True
+        b_net.description = "⏸ หยุดวัดเน็ต"
+        b_net.button_style = "warning"
+        threading.Thread(target=_net_loop, daemon=True).start()
+
+    b_net.on_click(_toggle_net)
     b_all, b_cache, b_stat, b_stop, b_delall, b_ref = _B("📦 โหลดครบ 10 ตัว", "primary", "155px"), _B("🧹 ล้างแคช", "info", "105px"), _B("📡 สถานะ", "", "95px"), _B("🛑 หยุด Server", "warning", "115px"), _B("🗑️ ลบทั้งหมด", "danger", "105px"), _B("🔄 รีเฟรช", "", "88px")
     chk_del = widgets.Checkbox(value=False, description="ยืนยันลบทั้งหมด", indent=False, layout=_L(width="125px"))
 
@@ -245,7 +309,7 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
         spec_hint,
     ], layout=_L(padding="8px 12px", border="1px solid #334155", border_radius="10px", margin="0 0 6px 0", gap="5px"))
 
-    tab1 = widgets.VBox([widgets.HBox([b_all, b_cache, b_stat, b_stop, chk_del, b_delall, b_ref], layout=_L(flex_flow="row wrap", gap="5px")), rows_box, log_out])
+    tab1 = widgets.VBox([widgets.HBox([b_all, b_cache, b_stat, b_stop, chk_del, b_delall, b_ref], layout=_L(flex_flow="row wrap", gap="5px")), rows_box, widgets.HBox([b_net, net_out], layout=_L(flex_flow="row wrap", gap="8px", align_items="center")), log_out])
 
     # --- TAB 2: Chat + StrataRAG ---
     sys_in = widgets.Text(value="คุณคือผู้ช่วย AI อัจฉริยะที่ตอบชัดเจนและถูกต้อง", description="System:", layout=_L(flex="1 1 300px"))

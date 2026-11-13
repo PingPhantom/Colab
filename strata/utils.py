@@ -84,6 +84,85 @@ def _invalidate_dir_cache(prefix: Path | None = None):
 def _fmt_bytes(n: int) -> str:
     return f"{n / (1024**3):.2f} GB" if n >= 1024**3 else (f"{n / (1024**2):.2f} MB" if n >= 1024**2 else f"{n / 1024:.1f} KB")
 
+# ---------------------------------------------------------------------------
+# Network bandwidth (DL/UL) — อ่านตัวนับไบต์จาก /proc/net/dev แล้วคำนวณส่วนต่าง
+# ---------------------------------------------------------------------------
+def _read_net_counters() -> tuple[int, int]:
+    """คืน (rx_bytes, tx_bytes) รวมทุก interface ยกเว้น loopback; (0, 0) ถ้าอ่านไม่ได้"""
+    try:
+        lines = Path("/proc/net/dev").read_text(encoding="utf-8", errors="ignore").splitlines()[2:]
+    except OSError:
+        return 0, 0
+    rx = tx = 0
+    for line in lines:
+        iface, sep, data = line.partition(":")
+        if not sep or iface.strip() == "lo":
+            continue
+        parts = data.split()
+        if len(parts) < 9:
+            continue
+        try:
+            rx += int(parts[0])
+            tx += int(parts[8])
+        except ValueError:
+            continue
+    return rx, tx
+
+
+class NetworkMonitor:
+    """คำนวณความเร็วเน็ต (bytes/s) จากส่วนต่างของตัวนับ — เรียกถี่แค่ไหนก็ได้ ไม่ต้องมี thread"""
+
+    def __init__(self, reader=_read_net_counters, clock=time.monotonic):
+        self._read = reader
+        self._clock = clock
+        self._prev: tuple[float, int, int] | None = None
+
+    def sample(self) -> dict:
+        now = self._clock()
+        try:
+            rx, tx = self._read()
+        except Exception:
+            rx = tx = 0
+        prev = self._prev
+        self._prev = (now, rx, tx)
+        down = up = 0.0
+        if prev is not None:
+            dt = now - prev[0]
+            if dt > 0 and rx >= prev[1] and tx >= prev[2]:  # กันตัวนับรีเซ็ต/reload
+                down = (rx - prev[1]) / dt
+                up = (tx - prev[2]) / dt
+        return {
+            "down_bps": down,
+            "up_bps": up,
+            "rx_bytes": rx,
+            "tx_bytes": tx,
+            "ok": prev is not None,
+        }
+
+    def reset(self) -> None:
+        self._prev = None
+
+
+_NET_MONITOR = NetworkMonitor()
+
+
+def net_bandwidth() -> dict:
+    """ความเร็วดาวน์โหลด/อัปโหลดปัจจุบัน (bytes/s) พร้อมยอดรวมสะสม"""
+    return _NET_MONITOR.sample()
+
+
+def _fmt_rate(bps: float) -> str:
+    """จัดรูปแบบความเร็ว: `0 B/s`, `812 KB/s`, `4.21 MB/s`"""
+    bps = max(0.0, float(bps))
+    if bps < 1024:
+        return f"{bps:.0f} B/s"
+    if bps < 1024**2:
+        return f"{bps / 1024:.0f} KB/s"
+    if bps < 1024**3:
+        return f"{bps / 1024**2:.2f} MB/s"
+    return f"{bps / 1024**3:.2f} GB/s"
+
+
 def _safe_extract_tar(tf: tarfile.TarFile, dest: Path) -> None:
     root = dest.resolve()
     members = []

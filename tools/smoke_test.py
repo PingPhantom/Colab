@@ -447,6 +447,41 @@ def test_server_lock_guard() -> None:
         t.join(5)
 
 
+def test_network_monitor() -> None:
+    """ตัววัด DL/UL: ต้องคำนวณจาก delta ได้, ทนตัวนับรีเซ็ต, และจัดรูปแบบความเร็วถูก"""
+    from strata.utils import NetworkMonitor, _fmt_rate, net_bandwidth
+
+    counters = {"v": (1_000, 500)}
+    clock = {"t": 100.0}
+    mon = NetworkMonitor(reader=lambda: counters["v"], clock=lambda: clock["t"])
+
+    first = mon.sample()
+    assert first["down_bps"] == 0.0 and first["up_bps"] == 0.0, "ตัวอย่างแรกยังไม่มี delta"
+    assert first["ok"] is False
+
+    clock["t"] += 2.0
+    counters["v"] = (1_000 + 2 * 1024**2, 500 + 512 * 1024)   # 2 MB ใน 2 วิ, 512 KB ใน 2 วิ
+    second = mon.sample()
+    assert second["ok"] is True
+    assert abs(second["down_bps"] - 1024**2) < 1, f"DL ผิด: {second['down_bps']}"
+    assert abs(second["up_bps"] - 256 * 1024) < 1, f"UL ผิด: {second['up_bps']}"
+    assert second["rx_bytes"] == counters["v"][0] and second["tx_bytes"] == counters["v"][1]
+
+    clock["t"] += 1.0
+    counters["v"] = (10, 10)          # ตัวนับถูกรีเซ็ต (เช่น คอนเทนเนอร์รีสตาร์ท)
+    third = mon.sample()
+    assert third["down_bps"] == 0.0 and third["up_bps"] == 0.0, "ตัวนับรีเซ็ตต้องไม่ทำให้เกิดค่าติดลบ/เลขมหาศาล"
+
+    live = net_bandwidth()
+    assert {"down_bps", "up_bps", "rx_bytes", "tx_bytes", "ok"} <= set(live), f"คีย์ไม่ครบ: {live}"
+    assert live["down_bps"] >= 0 and live["up_bps"] >= 0
+
+    assert _fmt_rate(0) == "0 B/s"
+    assert _fmt_rate(900 * 1024) == "900 KB/s"
+    assert _fmt_rate(4.21 * 1024**2) == "4.21 MB/s"
+    assert _fmt_rate(-5) == "0 B/s", "ค่าติดลบต้องถูก clamp"
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -465,6 +500,7 @@ def main() -> int:
     check("StrataRAG chunking", test_rag_chunking)
     check("StrataRAG dedup/search/persist", test_rag_dedup_search_persist)
     check("server lock guard", test_server_lock_guard)
+    check("network monitor (DL/UL)", test_network_monitor)
     if FAILURES:
         print(f"\n❌ ล้มเหลว {len(FAILURES)} รายการ")
         return 1
