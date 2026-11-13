@@ -1,4 +1,4 @@
-"""ดาวน์โหลด/ติดตั้ง/ลบโมเดล GGUF จาก Hugging Face ผ่าน `download-deepseek` ใน devshell."""
+"""ดาวน์โหลด/ติดตั้ง/ลบโมเดล GGUF จาก Hugging Face (download-deepseek → hf → huggingface_hub)."""
 from __future__ import annotations
 
 import fnmatch
@@ -25,6 +25,47 @@ from .config import (
 )
 from .server import check_disk_space, start_strata_server, stop_strata_server, switch_strata_model
 from .utils import _dir_bytes, _fmt_bytes, run_stream
+
+DOWNLOADER_HINT = (
+    "ไม่พบตัวดาวน์โหลด GGUF (download-deepseek / hf / huggingface_hub) — ปกติแปลว่าเซลล์ 1 ยังรันไม่จบ "
+    "หรือ PATH ของ nix devshell หลุดไปแล้ว ให้รัน `from strata.bootstrap import ensure_environment; "
+    "ensure_environment()` (หรือ `activate_devshell()` + `link_tools()`) แล้วลองโหลดใหม่"
+)
+
+
+def download_command(repo_id: str, model_dir: str, inc: list[str], exc: list[str]) -> list[str]:
+    """สร้างคำสั่งดาวน์โหลดจากเครื่องมือที่หาเจอ — คืน [] ถ้าต้องใช้ huggingface_hub แทน"""
+    if shutil.which("download-deepseek"):
+        args = [shlex.quote(str(model_dir))]
+        for p in inc:
+            args += ["--include", shlex.quote(p)]
+        for p in exc:
+            args += ["--exclude", shlex.quote(p)]
+        os.environ["HF_REPO_ID"] = str(repo_id)  # wrapper ใน devshell อ่าน repo จาก env นี้
+        return ["download-deepseek", *args]
+    if shutil.which("hf"):
+        args = ["hf", "download", shlex.quote(str(repo_id)), "--local-dir", shlex.quote(str(model_dir))]
+        for p in inc:
+            args += ["--include", shlex.quote(p)]
+        for p in exc:
+            args += ["--exclude", shlex.quote(p)]
+        return args
+    return []
+
+
+def download_with_module(repo_id: str, model_dir: str, inc: list[str], exc: list[str]) -> None:
+    """ทางสุดท้าย: ใช้ huggingface_hub ในโปรเซสนี้เลย (ไม่ต้องพึ่ง PATH ของ devshell)"""
+    try:
+        from huggingface_hub import snapshot_download
+    except ModuleNotFoundError as e:
+        raise RuntimeError(DOWNLOADER_HINT) from e
+    rprint(f"[dim]📥 ใช้ huggingface_hub (Python) ดาวน์โหลด {repo_id} → {model_dir}[/dim]")
+    snapshot_download(
+        repo_id=repo_id,
+        local_dir=str(model_dir),
+        allow_patterns=inc or None,
+        ignore_patterns=exc or None,
+    )
 
 
 def download_model_files(include: list[str] | str | None = None, exclude: list[str] | str | None = None, model_dir: str = MODEL_DIR, repo_id: str = CUSTOM_HF_REPO, force: bool = False) -> dict:
@@ -57,13 +98,11 @@ def download_model_files(include: list[str] | str | None = None, exclude: list[s
     if di["free_gb"] < req_gb and not force:
         raise RuntimeError(f"ดิสก์ไม่พอ: ต้องการ {req_gb:.2f} GB แต่ว่าง {di['free_gb']:.2f} GB (ใช้ force=True เพื่อข้ามการตรวจ)")
     rprint(f"[dim]📥 ต้องโหลด {len(pending)} ไฟล์ (~{_fmt_bytes(need)}) จาก {repo_id}[/dim]")
-    args = [shlex.quote(str(model_dir))]
-    for p in inc:
-        args += ["--include", shlex.quote(p)]
-    for p in exc:
-        args += ["--exclude", shlex.quote(p)]
-    os.environ["HF_REPO_ID"] = str(repo_id)
-    run_stream("download-deepseek " + " ".join(args))
+    cmd = download_command(repo_id, str(model_dir), inc, exc)
+    if cmd:
+        run_stream(" ".join(cmd))
+    else:
+        download_with_module(repo_id, str(model_dir), inc, exc)
     return {"downloaded": len(pending), "required_gb": round(req_gb, 2)}
 
 def _find_draft_gguf(folder: Path) -> Path | None:

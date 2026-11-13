@@ -148,6 +148,14 @@ def link_tools() -> None:
             pass
 
 
+REQUIRED_TOOLS = ("uv", "hf", "download-deepseek", "jq", "rg", "ruff")
+
+
+def missing_tools() -> list:
+    """เครื่องมือจาก devshell ที่หาไม่เจอใน PATH (ปกติควรว่าง)"""
+    return [t for t in REQUIRED_TOOLS if not shutil.which(t)]
+
+
 def activate_devshell() -> None:
     """ดึง env จาก `nix develop` มาใส่ process ปัจจุบัน (PATH/LD_LIBRARY_PATH รวมกับของเดิม)"""
     _log("⏳ กำลังโหลด Nix devshell...")
@@ -220,7 +228,13 @@ def ensure_environment(skip_devshell: bool = False) -> dict:
     if not skip_devshell:
         activate_devshell()
     link_tools()
+    missing = missing_tools()
+    if missing:
+        rprint(
+            f"[yellow]⚠️ ไม่พบเครื่องมือใน PATH: {', '.join(missing)} — ถ้าเพิ่งรันเซลล์ 1 ไม่จบ "
+            "ให้รันใหม่ หรือโหลดโมเดลจะพังด้วย `command not found`[/yellow]"
+        )
     ensure_venv()
     venv_site = activate_venv()
     rprint(f"[bold green]✅ สภาพแวดล้อมพร้อม[/bold green] (nixpkgs {NIXPKGS_REV[:7]} • {venv_site})")
-    return {"nixpkgs": NIXPKGS_REV, "venv": venv_site, "model_dir": MODEL_DIR}
+    return {"nixpkgs": NIXPKGS_REV, "venv": venv_site, "model_dir": MODEL_DIR, "missing_tools": missing}

@@ -695,6 +695,55 @@ def test_flake_template() -> None:
     assert "org/repo" in text, "flake.nix ต้องใส่ repo ของ GGUF ที่กำหนด"
 
 
+def test_downloader_fallback() -> None:
+    """โหลด GGUF ต้องไม่ตายด้วย `command not found` — ถอยจาก download-deepseek → hf → huggingface_hub"""
+    from strata import download as dl
+
+    real_which = dl.shutil.which
+    try:
+        dl.shutil.which = lambda name: "/nix/store/x/bin/" + name if name == "download-deepseek" else None
+        cmd = dl.download_command("org/repo", "/tmp/m", ["*Q4_K_M*"], ["*f16*"])
+        assert cmd[0] == "download-deepseek", f"ควรใช้ wrapper ก่อน: {cmd}"
+        assert "--include" in cmd and "--exclude" in cmd and "/tmp/m" in cmd, f"args ไม่ครบ: {cmd}"
+        assert os.environ.get("HF_REPO_ID") == "org/repo", "wrapper ต้องได้ repo ผ่าน HF_REPO_ID"
+
+        dl.shutil.which = lambda name: "/usr/local/bin/hf" if name == "hf" else None
+        cmd = dl.download_command("org/repo", "/tmp/m", ["*Q4_K_M*"], [])
+        assert cmd[:3] == ["hf", "download", "org/repo"], f"ควรถอยไปใช้ hf CLI: {cmd}"
+        assert "--local-dir" in cmd and "/tmp/m" in cmd, f"args ไม่ครบ: {cmd}"
+
+        dl.shutil.which = lambda name: None  # ไม่มีอะไรเลย -> ใช้โมดูล Python
+        assert dl.download_command("org/repo", "/tmp/m", [], []) == []
+
+        calls: dict = {}
+        fake = type(sys)("huggingface_hub")
+
+        def fake_snapshot(**kw):  # noqa: ANN003
+            calls.update(kw)
+
+        fake.snapshot_download = fake_snapshot
+        sys.modules["huggingface_hub"] = fake
+        try:
+            dl.download_with_module("org/repo", "/tmp/m", ["*Q4*"], ["*f16*"])
+        finally:
+            del sys.modules["huggingface_hub"]
+        assert calls["repo_id"] == "org/repo" and calls["local_dir"] == "/tmp/m", f"args ผิด: {calls}"
+        assert calls["allow_patterns"] == ["*Q4*"] and calls["ignore_patterns"] == ["*f16*"], f"patterns ผิด: {calls}"
+
+        # ไม่มีทั้งเครื่องมือและโมดูล -> error ที่บอกวิธีแก้ ไม่ใช่ command not found
+        sys.modules["huggingface_hub"] = None
+        try:
+            dl.download_with_module("org/repo", "/tmp/m", [], [])
+        except RuntimeError as exc:
+            assert "ensure_environment" in str(exc) or "devshell" in str(exc), f"ควรบอกวิธีแก้: {exc}"
+        else:
+            raise AssertionError("ควร raise เมื่อไม่มีตัวดาวน์โหลดเลย")
+        finally:
+            sys.modules.pop("huggingface_hub", None)
+    finally:
+        dl.shutil.which = real_which
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -714,6 +763,7 @@ def main() -> int:
     check("StrataRAG dedup/search/persist", test_rag_dedup_search_persist)
     check("server lock guard", test_server_lock_guard)
     check("network monitor (DL/UL)", test_network_monitor)
+    check("downloader fallback", test_downloader_fallback)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
     check("package files tracked by git", test_package_files_tracked)
     check("flake.nix from embedded template", test_flake_template)
