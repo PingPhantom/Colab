@@ -15,6 +15,8 @@ dependencies = [
   "fastembed>=0.4,<1",
   "pypdf>=4.2,<8",
   "ipywidgets>=8.1,<9",
+  # ใช้เป็นทางสำรองตอนดาวน์โหลด GGUF ถ้าไม่มี download-deepseek/hf ใน PATH
+  "huggingface-hub[hf_transfer]>=0.26,<2",
 ]
 
 [dependency-groups]

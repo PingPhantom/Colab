@@ -177,6 +177,7 @@ ruff check strata tools           # lint
 | --- | --- |
 | `FileNotFoundError: strata/templates/flake.nix` | แก้แล้ว: เทมเพลตย้ายไปอยู่ในโค้ด (`strata/flake_template.py`) ไม่มีไฟล์ภายนอกให้หายอีก — ถ้า clone เดิมยังพัง ให้รันเซลล์ 1 v6 (จะ `git reset --hard` ให้เอง) |
 | `RuntimeError: clone ... แล้วไม่พบแพ็กเกจ strata/` | ทุก branch ที่ลองไม่มีโค้ด — ใส่ชื่อ branch ในช่อง `REPO_BRANCH` ให้ตรง (เช่น branch ของ PR) หรือ merge PR เข้า branch หลัก |
+| `/bin/bash: download-deepseek: command not found` | devshell ยังไม่ถูก activate — รัน `from strata.bootstrap import ensure_environment; ensure_environment()` แล้วดู `env['missing_tools']` (โค้ดใหม่จะถอยไปใช้ `hf`/`huggingface_hub` ให้เอง) |
 | `ModuleNotFoundError: No module named 'strata'` | เกิดเมื่อรันเซลล์ที่ 2 ก่อนเซลล์ที่ 1 หรือ clone ไม่สำเร็จ — รันเซลล์ 1 ใหม่ (จะมีข้อความ `📂 ใช้โค้ดจาก: ...`) และถ้าทดสอบ branch/PR ให้ใส่ชื่อ branch ในช่อง `REPO_BRANCH` |
 | `ติดตั้ง Nix` ค้าง/ช้า | Colab บางรอบเน็ตช้า ลองรันเซลล์ 1 ใหม่ (ขั้นตอนที่ทำแล้วจะถูกข้าม) |
 | `nix develop` ฟ้อง hash mismatch | ลบ `flake.lock` แล้วรันใหม่ หรือ `nix flake update` |

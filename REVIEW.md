@@ -140,6 +140,21 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🐞 P0 (รอบ 3): `download-deepseek: command not found` ตอนโหลดโมเดล
+
+`download_model_files()` เรียก `download-deepseek` ตรง ๆ ผ่าน `/bin/bash -c` ซึ่งเป็นสคริปต์ที่มาจาก
+`nix develop` devshell — ถ้าเซลล์ 1 ไม่ได้จบ (หรือ PATH ของ devshell หลุด) จะได้ error ของ bash ที่แก้ไม่ได้ด้วยตัวเอง
+
+- `download_command()` เลือกเครื่องมือตามที่หาเจอ: `download-deepseek` → `hf` CLI → `[]`
+- `download_with_module()` ใช้ `huggingface_hub.snapshot_download` (มี `allow_patterns`/`ignore_patterns`)
+  เป็นทางสุดท้ายที่ไม่ต้องพึ่ง PATH — ถ้าไม่มีเลยจะได้ `RuntimeError` ที่บอกให้รัน `ensure_environment()`
+- `huggingface-hub[hf_transfer]` ถูกเพิ่มใน dependency เพื่อให้ทางสำรองนี้มีเสมอ
+- `bootstrap.missing_tools()` ตรวจเครื่องมือ devshell (`uv/hf/download-deepseek/jq/rg/ruff`) แล้ว
+  เตือนตอน `ensure_environment()` พร้อมคืนค่าใน `missing_tools` ของ dict สรุป
+- เทสต์ `downloader fallback`: ลำดับ wrapper → hf → โมดูล, การส่ง pattern, และข้อความ error เมื่อไม่มีอะไรเลย
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
