@@ -943,6 +943,62 @@ def test_prebuilt_glibc_isolation() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_gpu_memory_preflight() -> None:
+    """VRAM ค้างจาก process เก่า -> ต้องเก็บกวาดให้ และรอโหลดนานขึ้นตามขนาดโมเดล"""
+    from strata import server as sv
+
+    assert sv.load_timeout_for(4) == 240, "โมเดลเล็กใช้ค่าเริ่มต้น"
+    assert sv.load_timeout_for(20.8) > 240, "โมเดลใหญ่ต้องรอนานขึ้น"
+    assert sv.load_timeout_for(500) == 900, "ต้องมีเพดานเวลารอ"
+
+    real_run, real_kill, real_sleep = sv.subprocess.run, sv.os.kill, sv.time.sleep
+    real_which = sv.shutil.which
+    sv.shutil.which = lambda name: "/usr/bin/nvidia-smi" if name == "nvidia-smi" else None
+
+    # อ่านรายการ process ที่กิน VRAM (nvidia-smi)
+    class R:
+        def __init__(self, out=""):
+            self.stdout = out
+            self.returncode = 0
+            self.stderr = ""
+
+    def fake_run(cmd, **kw):  # noqa: ANN001
+        if "--query-compute-apps" in " ".join(cmd):
+            return R("1234, /usr/local/bin/llama-server, 14000\n5678, python3, 512\n")
+        if cmd[:2] == ["pgrep", "-af"]:
+            return R("1234 /content/.llama-cpp/llama-b1/llama-server --port 18080\n999 other-prog\n")
+        return R()
+
+    sv.subprocess.run = fake_run
+    try:
+        users = sv.gpu_memory_users()
+        assert users and users[0]["pid"] == 1234 and users[0]["mb"] == 14000, f"อ่าน VRAM ผิด: {users}"
+        assert [p for p in sv._llama_pids()] == [1234], f"ควรเจอเฉพาะ llama-server: {sv._llama_pids()}"
+
+        # release_gpu_memory: ฆ่า process ค้างแล้วรอ VRAM คืน
+        killed: list = []
+        sv.os.kill = lambda pid, sig: killed.append((pid, sig))
+        sv.time.sleep = lambda s: None
+        free = {"gb": [0.4, 0.5, 6.2]}
+
+        def fake_hw(verbose=False):  # noqa: ANN001
+            val = free["gb"].pop(0) if len(free["gb"]) > 1 else free["gb"][0]
+            return {"has_gpu": True, "vram_free_gb": val}
+
+        real_hw = sv.check_gpu_and_recommend
+        sv.check_gpu_and_recommend = fake_hw
+        try:
+            info = sv.release_gpu_memory(port=18080)
+        finally:
+            sv.check_gpu_and_recommend = real_hw
+        assert 1234 in info["killed"], f"ต้องฆ่า pid ที่ค้าง: {info}"
+        assert info["vram_free_gb"] >= 2.0, f"ควรได้ VRAM คืน: {info}"
+        assert killed and killed[0][0] == 1234, f"ต้องส่ง SIGTERM ให้ pid ค้าง: {killed}"
+    finally:
+        sv.subprocess.run, sv.os.kill, sv.time.sleep = real_run, real_kill, real_sleep
+        sv.shutil.which = real_which
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -964,6 +1020,7 @@ def main() -> int:
     check("network monitor (DL/UL)", test_network_monitor)
     check("downloader fallback", test_downloader_fallback)
     check("prebuilt libc isolation (glibc)", test_prebuilt_glibc_isolation)
+    check("GPU memory preflight", test_gpu_memory_preflight)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
     check("stale module purge", test_purge_modules)
     check("branch auto-detect", test_branch_autodetect)

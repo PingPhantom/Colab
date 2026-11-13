@@ -204,6 +204,21 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🐞 P0 (รอบ 6): VRAM ค้าง 14.6/15.0 GB ขณะ server Offline
+
+บน Tesla T4 อาการคือ `start_strata_server` ถูกบังคับ offload ลง RAM เพราะ `vram_free_gb` เหลือ ~0.4 GB
+(เหลือจาก process รอบก่อนที่ตายแต่ยังไม่คืนหน่วยความจำ) → รอโหลดเกิน 240s → ล้มทุก fallback
+
+- `_llama_pids()` + `gpu_memory_users()`: หา process ค้างของโปรเจกต์ และบอกว่าใครถือ VRAM อยู่ (nvidia-smi)
+- `release_gpu_memory(port)`: SIGTERM → SIGKILL ตามลำดับ แล้ว poll จน VRAM คืน (สูงสุด 12s)
+- `start_strata_server()` เรียก preflight นี้เมื่อ `vram_free_gb < 2.0` (ก่อนเลือก quant/คำนวณ `--n-gpu-layers`)
+  และพิมพ์เตือนพร้อมรายชื่อผู้ถือ VRAM + แนะนำ `Runtime → Restart session` ถ้ายังไม่พอ
+- `load_timeout_for(size_gb)`: 240s (≤8GB) → +40s/GB สูงสุด 900s; ใช้ทั้งใน `_spawn` และข้อความ error
+- เตือนเมื่อ `size_gb > vram_free - 2.2` ว่าจะ offload ลง RAM (ช้า)
+- เทสต์ `GPU memory preflight`: parse nvidia-smi/pgrep, SIGTERM pid ค้าง, poll จนได้ VRAM คืน, ช่วง timeout
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

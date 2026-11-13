@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # openai ถูก import ตอนเรียกใช้�
 LLAMA_SERVER_PROC: subprocess.Popen | None = None
 
 NIX_STORE = "/nix/store/"
+LLAMA_CPP_DIR = "/content/.llama-cpp"
 WRAPPER_REV = "# strata-wrapper-v2"  # v2 = กรอง /nix/store ออกจาก LD_LIBRARY_PATH (glibc ของ Nix ชนกับระบบ)
 
 
@@ -143,7 +144,7 @@ def _write_wrapper(srv_bin: Path, dest: Path, wrapper: Path = Path("/usr/local/b
     return wrapper
 
 
-def install_llama_server(install_dir: str = "/content/.llama-cpp") -> str:
+def install_llama_server(install_dir: str = LLAMA_CPP_DIR) -> str:
     wrapper = Path("/usr/local/bin/llama-server")
     if wrapper.exists():
         wtxt = wrapper.read_text(encoding="utf-8", errors="ignore")
@@ -341,6 +342,79 @@ def _pick_main_gguf(model_dir: str, hw: dict | None = None, prefer: str | None =
         rprint(f"[dim]   → เลือก {chosen.name} ({sz:.2f} GB / งบหน่วยความจำ {budget:.2f} GB)[/dim]")
     return chosen, mm_pick, sz
 
+def _llama_pids() -> list:
+    """pid ของ llama-server ที่ค้างอยู่ (ของโปรเจกต์นี้) — ใช้คืน VRAM ก่อนสตาร์ทใหม่"""
+    try:
+        out = subprocess.run(["pgrep", "-af", "llama-server"], capture_output=True, text=True).stdout
+    except (FileNotFoundError, OSError):
+        return []
+    pids: list = []
+    for line in out.splitlines():
+        pid_s, _, cmd = line.strip().partition(" ")
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        if LLAMA_SERVER_PROC and pid == LLAMA_SERVER_PROC.pid:
+            continue
+        if LLAMA_CPP_DIR in cmd or "llama-server" in Path(cmd.split(" ")[0]).name:
+            pids.append(pid)
+    return pids
+
+
+def gpu_memory_users() -> list:
+    """(pid, ชื่อ process, MB) ที่กำลังกิน VRAM อยู่ — ไว้แสดงตอน VRAM ไม่พอ"""
+    smi = shutil.which("nvidia-smi")
+    if not smi:
+        return []
+    try:
+        out = subprocess.run(
+            [smi, "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    users = []
+    for line in out.splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) == 3 and parts[0].isdigit():
+            users.append({"pid": int(parts[0]), "name": parts[1], "mb": int(float(parts[2] or 0))})
+    return users
+
+
+def load_timeout_for(size_gb: float) -> int:
+    """เวลารอโหลดโมเดล — โมเดลใหญ่ (หรือ offload ลง RAM) ใช้เวลามากกว่า 4 นาที"""
+    return int(min(900, max(240, 240 + (float(size_gb) - 8.0) * 40)))
+
+
+def release_gpu_memory(port: int | None = None, wait_s: float = 12.0) -> dict:
+    """ฆ่า llama-server ที่ค้าง (ของโปรเจกต์นี้) แล้วรอให้ VRAM ถูกคืน"""
+    killed = _kill_server_on_port(int(port)) if port else []
+    extra = [pid for pid in _llama_pids() if pid not in killed]
+    for pid in extra:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            continue
+    if extra:
+        time.sleep(1.0)
+        for pid in extra:
+            try:
+                os.kill(pid, 0)  # ยังอยู่?
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                continue
+    deadline = time.monotonic() + wait_s
+    free = 0.0
+    while time.monotonic() < deadline:
+        hw = check_gpu_and_recommend(verbose=False)
+        free = float(hw["vram_free_gb"])
+        if not hw["has_gpu"] or free >= 2.0:
+            break
+        time.sleep(1.0)
+    return {"killed": killed + extra, "vram_free_gb": free}
+
+
 def _kill_server_on_port(port: int) -> list[int]:
     """ฆ่าเฉพาะ process llama-server ที่ฟังพอร์ตที่กำหนด (ไม่แตะ process อื่นในเครื่อง)"""
     killed: list[int] = []
@@ -392,11 +466,33 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
     if restart:
         stop_strata_server(port=port)
     hw = check_gpu_and_recommend(verbose=False)
+    if hw["has_gpu"] and hw["vram_free_gb"] < 2.0:
+        # VRAM ค้างจากรอบก่อน (process ตายแต่ยังไม่คืนหน่วยความจำ) -> เก็บกวาดก่อน
+        rprint(f"[yellow]🧹 VRAM ว่างแค่ {hw['vram_free_gb']:.2f} GB — เก็บกวาด llama-server ที่ค้างอยู่[/yellow]")
+        info = release_gpu_memory(port)
+        hw = check_gpu_and_recommend(verbose=False)
+        if info["killed"]:
+            rprint(f"[dim]   ปิด process ค้าง: {', '.join(map(str, info['killed']))}[/dim]")
+        if hw["vram_free_gb"] < 2.0:
+            holders = ", ".join(f"{u['name']}(pid {u['pid']}, {u['mb']} MB)" for u in gpu_memory_users()[:5])
+            rprint(
+                f"[bold red]⚠️ VRAM ยังว่างแค่ {hw['vram_free_gb']:.2f} GB"
+                f"{' — ตัวที่ถืออยู่: ' + holders if holders else ''}[/bold red]\n"
+                "[yellow]   จะสตาร์ทแบบ offload ลง RAM (ช้ากว่าปกติมาก) — ลอง Runtime → Restart session "
+                "ถ้าต้องการคืน VRAM ทั้งหมด[/yellow]"
+            )
     ctx_size = int(ctx_size or hw["recommended_ctx_size"])
     SPEC_STATE["ctx_size"] = ctx_size
     main_gguf, mmproj_gguf, size_gb = _pick_main_gguf(model_dir, hw=hw, prefer=quant)
     SPEC_STATE["last_model_dir"] = str(model_dir)
-    rprint(f"[dim]🧠 ctx-size = {ctx_size} tokens (ปรับตาม VRAM อัตโนมัติ)[/dim]")
+    usable_vram = max(0.0, float(hw["vram_free_gb"]) - 2.2) if hw["has_gpu"] else 0.0
+    if hw["has_gpu"] and size_gb > usable_vram:
+        rprint(
+            f"[yellow]⚠️ โมเดล {size_gb:.1f} GB ใหญ่กว่า VRAM ที่ใช้ได้ ({usable_vram:.1f} GB) — "
+            "จะ offload บางส่วนลง RAM ทำให้ช้าลง (เลือก quant เล็กลงถ้าไม่ไหว)[/yellow]"
+        )
+    load_timeout = load_timeout_for(size_gb)
+    rprint(f"[dim]🧠 ctx-size = {ctx_size} tokens (ปรับตาม VRAM อัตโนมัติ) • รอโหลดสูงสุด {load_timeout}s[/dim]")
     help_txt = subprocess.run([srv_bin, "--help"], capture_output=True, text=True).stdout
     alias_name = Path(model_dir).name
 
@@ -474,7 +570,7 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
             LLAMA_SERVER_PROC = subprocess.Popen(
                 cmd_run, stdout=log_f, stderr=subprocess.STDOUT, text=True, env=server_env()
             )
-        deadline = time.monotonic() + 240
+        deadline = time.monotonic() + load_timeout
         while time.monotonic() < deadline:
             if LLAMA_SERVER_PROC.poll() is not None:
                 tail = "\n".join(LLAMA_LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-25:])
@@ -484,10 +580,10 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
             is_ok, loaded_id = _check_server_online(port, ttl=0.0)
             if is_ok:
                 SPEC_STATE["active_label"] = lbl_run
-                elapsed = int(240 - (deadline - time.monotonic()))
+                elapsed = int(load_timeout - (deadline - time.monotonic()))
                 rprint(f"[bold green]✅ Server พร้อมใน {elapsed}s! (model='{loaded_id}' • {lbl_run})[/bold green]")
                 return True, loaded_id
-            elapsed = int(240 - (deadline - time.monotonic()))
+            elapsed = int(load_timeout - (deadline - time.monotonic()))
             if elapsed and elapsed % 10 == 0:
                 rprint(f"[dim]   ⏳ กำลังโหลดโมเดลลง GPU/RAM... ({elapsed}s)[/dim]")
             time.sleep(1.0)
@@ -498,7 +594,7 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
             except subprocess.TimeoutExpired:
                 LLAMA_SERVER_PROC.kill()
         tail = "\n".join(LLAMA_LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-15:])
-        return False, f"โหลดโมเดลเกิน 240 วินาที\n{tail}"
+        return False, f"โหลดโมเดลเกิน {load_timeout} วินาที\n{tail}{start_error_hint(tail)}"
 
     fallbacks = [eff_mode] + (["draft_file", "ngram"] if eff_mode == "draft_file_mtp" else (["ngram"] if eff_mode in ("mtp", "draft_file") else []))
     last_err = ""
