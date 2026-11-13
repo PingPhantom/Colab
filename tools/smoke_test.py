@@ -484,77 +484,126 @@ def test_network_monitor() -> None:
 
 
 def test_notebook_repo_bootstrap() -> None:
-    """เซลล์ setup ต้องหา/โคลนรีโปเองได้ (ไม่งั้นเปิด notebook เดี่ยว ๆ ใน Colab จะ ModuleNotFoundError)"""
+    """เซลล์ setup ต้องหา/โคลนรีโปเองได้ และถอยไปใช้ branch ของ PR เมื่อ branch หลักยังไม่มีแพ็กเกจ"""
     nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     src = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
     tree = ast.parse(src)
-    node = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_ensure_repo"), None)
-    assert node is not None, "ไม่พบฟังก์ชัน _ensure_repo ในเซลล์ setup (โหลดเซลล์เก่าอยู่?)"
+    funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+    names = {f.name for f in funcs}
+    assert "_ensure_repo" in names, "ไม่พบฟังก์ชัน _ensure_repo ในเซลล์ setup (โหลดเซลล์เก่าอยู่?)"
+    assert "_pr_branches" in names, "ต้องมีตัวช่วยหา branch ของ PR สำหรับ fallback"
     assert "NOTEBOOK_REV" in src, "เซลล์ setup ต้องมี marker NOTEBOOK_REV ให้เดาเวอร์ชันได้"
 
     if Path("/content").exists():
         raise Skip("มี /content อยู่ในเครื่องนี้ (จำลอง Colab ไม่ได้)")
 
+    old_cwd = Path.cwd()
     tmp = Path(tempfile.mkdtemp())
-    calls: list[list[str]] = []
+    clones: list[list[str]] = []
+    pr_calls: list[str] = []
+
+    ok_refs = {"pr/head", "feature/x"}  # จำลองว่า branch หลักยังไม่มีแพ็กเกจ strata/
 
     class _OK:
         returncode = 0
 
     def fake_run(cmd, check=False, env=None, **kw):  # noqa: ANN001
-        calls.append(list(cmd))
+        clones.append(list(cmd))
         target = Path(cmd[-1])
-        (target / "strata").mkdir(parents=True, exist_ok=True)
-        (target / "strata" / "__init__.py").write_text("")
+        ref = cmd[cmd.index("--branch") + 1] if "--branch" in cmd else ""
+        if ref in ok_refs:
+            (target / "strata").mkdir(parents=True, exist_ok=True)
+            (target / "strata" / "__init__.py").write_text("")
         return _OK()
 
     fake_subprocess = type("subprocess", (), {"run": staticmethod(fake_run)})
-    ns = {"Path": Path, "os": __import__("os"), "shutil": shutil, "subprocess": fake_subprocess, "__name__": "shim"}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), "<shim>", "exec"), ns)  # noqa: S102
+    ns = {
+        "Path": Path,
+        "os": os,
+        "shutil": shutil,
+        "json": json,
+        "subprocess": fake_subprocess,
+        "urllib": None,
+        "__name__": "shim",
+    }
+    body = [ast.FunctionDef(**{**f.__dict__, "decorator_list": []}) for f in funcs]
+    exec(compile(ast.Module(body=body, type_ignores=[]), "<shim>", "exec"), ns)  # noqa: S102
+    ns["_pr_branches"] = lambda slug: (pr_calls.append(slug), ["no/strata", "pr/head"])[1]
     ensure_repo = ns["_ensure_repo"]
 
     try:
-        # 1) มีแพ็กเกจอยู่ใน cwd แล้ว -> ต้องไม่ clone
+        # 1) มีแพ็กเกจอยู่ใน cwd แล้ว -> ต้องไม่ clone และไม่ถาม GitHub
         work = tmp / "repo"
         (work / "strata").mkdir(parents=True)
         (work / "strata" / "__init__.py").write_text("")
-        old_cwd = Path.cwd()
         os.chdir(work)
         try:
-            assert ensure_repo("org/repo", "") == work.resolve() or ensure_repo("org/repo", "").resolve() == work.resolve()
+            assert ensure_repo("org/repo", "").resolve() == work.resolve()
         finally:
             os.chdir(old_cwd)
-        assert not calls, f"ไม่ควร clone เมื่อมีแพ็กเกจอยู่แล้ว: {calls}"
+        assert not clones and not pr_calls, f"ไม่ควร clone/ถาม GitHub เมื่อมีแพ็กเกจอยู่แล้ว: {clones}"
 
-        # 2) ไม่มีแพ็กเกจ -> clone (พร้อม --branch ถ้าระบุ)
+        # 2) ไม่ระบุ branch -> ลอง branch หลักก่อน, ไม่มีโค้ด, แล้วถอยไปใช้ PR ที่เปิดอยู่
         bare = tmp / "bare"
         bare.mkdir()
         os.chdir(bare)
         try:
-            got = ensure_repo("org/repo", "feature/x")
-            assert got == bare / "Colab" or got == Path("/content/Colab"), f"ปลายทางผิด: {got}"
+            got = ensure_repo("org/repo", "")
         finally:
             os.chdir(old_cwd)
-        assert len(calls) == 1, f"ควรเรียก clone ครั้งเดียว ได้ {calls}"
-        cmd = calls[0]
-        assert cmd[0] == "git" and cmd[1] == "clone" and "--depth" in cmd, f"คำสั่ง clone ผิด: {cmd}"
-        assert "--branch" in cmd and "feature/x" in cmd, f"ต้องส่ง branch ที่ขอ: {cmd}"
-        assert any(str(c).startswith("https://github.com/org/repo") for c in cmd), f"URL ผิด: {cmd}"
+        assert got.resolve() == (bare / "Colab").resolve(), f"ปลายทางผิด: {got}"
+        assert len(clones) == 3, f"ควรไล่ default -> PR#1 -> PR#2 ได้ {clones}"
+        assert "--branch" not in clones[0], f"รอบแรกต้องเป็น branch หลัก: {clones[0]}"
+        tried = [c[c.index("--branch") + 1] for c in clones[1:]]
+        assert tried == ["no/strata", "pr/head"], f"ลำดับ branch ที่ลองผิด: {tried}"
+        for cmd in clones:
+            assert cmd[0] == "git" and cmd[1] == "clone" and "--depth" in cmd, f"คำสั่ง clone ผิด: {cmd}"
+            assert any(str(c).startswith("https://github.com/org/repo") for c in cmd), f"URL ผิด: {cmd}"
+        assert pr_calls == ["org/repo"], f"ต้องถาม GitHub ครั้งเดียว: {pr_calls}"
 
-        # 3) ปลายทางมีของเก่าค้าง (ไม่มี strata) -> ต้องลบทิ้งแล้ว clone ใหม่
+        # 3) ระบุ branch เอง -> ลองครั้งเดียว ไม่ต้องถาม GitHub
+        picks = tmp / "picks"
+        picks.mkdir()
+        clones.clear()
+        pr_calls.clear()
+        os.chdir(picks)
+        try:
+            ensure_repo("org/repo", "feature/x")
+        finally:
+            os.chdir(old_cwd)
+        assert len(clones) == 1 and clones[0][clones[0].index("--branch") + 1] == "feature/x", f"{clones}"
+        assert not pr_calls, "ระบุ branch เองแล้วไม่ควรถาม GitHub"
+
+        # 4) ปลายทางมีของเก่าค้าง (ไม่มี strata) -> ต้องลบทิ้งก่อน clone
         stale = tmp / "stale"
         (stale / "Colab").mkdir(parents=True)
         (stale / "Colab" / "junk.txt").write_text("x")
-        calls.clear()
+        clones.clear()
         os.chdir(stale)
         try:
             ensure_repo("org/repo", "")
         finally:
             os.chdir(old_cwd)
-        assert calls, "ต้อง clone ใหม่เมื่อของเดิมเสีย"
+        assert clones, "ต้อง clone ใหม่เมื่อของเดิมเสีย"
         assert not (stale / "Colab" / "junk.txt").exists(), "ของเก่าค้างต้องถูกลบก่อน clone"
+
+        # 5) ทุก branch ไม่มีโค้ด -> error ที่บอกทางออก (REPO_BRANCH)
+        empty = tmp / "empty"
+        empty.mkdir()
+        ok_refs.clear()  # จำลองว่าไม่มี branch ไหนมีแพ็กเกจเลย
+        ns["_pr_branches"] = lambda slug: ["no/strata"]
+        os.chdir(empty)
+        try:
+            try:
+                ensure_repo("org/repo", "")
+            except RuntimeError as exc:
+                assert "REPO_BRANCH" in str(exc), f"ข้อความควรบอกทางออก: {exc}"
+            else:
+                raise AssertionError("ควร raise เมื่อไม่มี branch ไหนมีแพ็กเกจ")
+        finally:
+            os.chdir(old_cwd)
     finally:
-        os.chdir(Path.cwd())
+        os.chdir(old_cwd)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

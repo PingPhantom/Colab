@@ -98,7 +98,15 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 - เพิ่มช่อง `REPO_SLUG` / `REPO_BRANCH` (Colab form) สำหรับ fork หรือทดสอบ branch/PR
 - ถ้า clone แล้วยังไม่เจอ `strata/` (เช่น branch หลักยังไม่ merge) จะได้ error บอกให้ใส่ `REPO_BRANCH`
 - เซลล์ 2 มี guard: ถ้ารันข้ามเซลล์จะบอกให้รันเซลล์ 1 ก่อน
-- เทสต์: `test_notebook_repo_bootstrap` (ตรวจกรณีมีโค้ดอยู่แล้ว / ต้อง clone / ของค้างต้องถูกลบ)
+- เทสต์: `test_notebook_repo_bootstrap` (มีโค้ดอยู่แล้ว / ต้อง clone / ลำดับ fallback / ของค้างถูกลบ / error บอกทางออก)
+
+### v4: fallback ไป branch ของ PR อัตโนมัติ
+อาการจริงที่เจอ: `REPO_BRANCH` ว่าง → clone `main` → `main` ยังไม่มี `strata/` (PR ยังไม่ merge) → `RuntimeError`
+- `_pr_branches()` ถาม `https://api.github.com/repos/{slug}/pulls?state=open` (timeout 10s, ล้มเหลว = เงียบ ๆ ใช้ branch หลัก)
+- `_ensure_repo()` ไล่ลำดับ: branch ที่ผู้ใช้ระบุ → branch หลัก → branch ต้นทางของ PR ที่เปิดอยู่
+  โดยลบโฟลเดอร์ปลายทางก่อน clone ทุกครั้ง และหยุดที่ตัวแรกที่มี `strata/__init__.py`
+- ถ้าทุกตัวไม่มีโค้ด → `RuntimeError` บอกให้ใส่ `REPO_BRANCH`; ทดสอบกับ GitHub จริงแล้วไล่ไปเจอ `arena/e076c6f4-colab` เอง
+- `NOTEBOOK_REV = "v4-pr-fallback"` พิมพ์เป็นบรรทัดแรก เพื่อแยกเซลล์เก่า/ใหม่ได้ทันที
 
 ---
 
