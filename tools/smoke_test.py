@@ -26,6 +26,7 @@ import tempfile
 import tokenize
 import zipfile
 from pathlib import Path
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK = ROOT / "nix.ipynb"
@@ -774,6 +775,48 @@ def test_purge_modules() -> None:
     assert "KEPT: True" in out.stdout, f"ไม่ควรลบโมดูลของแพ็กเกจอื่น: {out.stdout}"
 
 
+def test_branch_autodetect() -> None:
+    """เซลล์ setup ต้องเดา slug/branch เองจาก URL ของ Colab (หรือ git ของ clone เดิม) — ไม่ต้องพิมพ์ `arena/...`"""
+    nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    src = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    tree = ast.parse(src)
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    for need in ("_parse_github_url", "_detect_source"):
+        assert need in funcs, f"ไม่พบ {need} ในเซลล์ setup"
+
+    ns = {"unquote": unquote, "Path": Path, "subprocess": subprocess}
+    exec(compile(ast.Module(body=[funcs["_parse_github_url"]], type_ignores=[]), "<p>", "exec"), ns)  # noqa: S102
+    parse = ns["_parse_github_url"]
+    base = "https://colab.research.google.com/github/PingPhantom/Colab/blob/"
+    assert parse(base + "arena/e076c6f4-colab/nix.ipynb") == ("PingPhantom/Colab", "arena/e076c6f4-colab")
+    assert parse(base + "main/nix.ipynb?hl=th") == ("PingPhantom/Colab", "main")
+    assert parse(base + "feature%2Fnew-ui/nix.ipynb") == ("PingPhantom/Colab", "feature/new-ui")
+    assert parse("https://colab.research.google.com/drive/1abcDEF") == ("", ""), "ไม่ใช่ลิงก์ GitHub ต้องไม่เดา"
+    assert parse("") == ("", "")
+
+    # ไม่มี URL (เช่นเปิดจาก Drive) -> ต้องถอยไปใช้ branch ของ clone ที่มีอยู่
+    ns2 = dict(ns)
+    exec(compile(ast.Module(body=[funcs["_detect_source"]], type_ignores=[]), "<d>", "exec"), ns2)  # noqa: S102
+    ns2["_git"] = lambda args, cwd=None: "arena/e076c6f4-colab"
+    ns2["Path"] = Path
+    detect = ns2["_detect_source"]
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        clone = tmp / "Colab"
+        (clone / ".git").mkdir(parents=True)
+        old = Path.cwd()
+        os.chdir(tmp)
+        try:
+            ns2["Path"] = Path
+            assert detect() == ("", "arena/e076c6f4-colab"), "ควรอ่าน branch จาก git ของ clone เดิม"
+        finally:
+            os.chdir(old)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    assert 'REPO_BRANCH = REPO_BRANCH or _found_branch' in src, "ต้องเติม REPO_BRANCH อัตโนมัติจากค่าที่เดาได้"
+    assert 'REPO_SLUG = REPO_SLUG or _found_slug or DEFAULT_SLUG' in src, "ต้องเติม REPO_SLUG อัตโนมัติ"
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -796,6 +839,7 @@ def main() -> int:
     check("downloader fallback", test_downloader_fallback)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
     check("stale module purge", test_purge_modules)
+    check("branch auto-detect", test_branch_autodetect)
     check("package files tracked by git", test_package_files_tracked)
     check("flake.nix from embedded template", test_flake_template)
     if FAILURES:

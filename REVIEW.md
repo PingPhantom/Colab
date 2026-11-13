@@ -155,6 +155,20 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## ✨ ปรับ UX: เดา repo/branch อัตโนมัติ (เซลล์ 1 v8)
+
+ผู้ใช้ไม่ควรต้องพิมพ์ `arena/e076c6f4-colab` เองทุกครั้ง
+
+- `_parse_github_url()` แยก `(owner/repo, branch)` จาก URL ของ Colab (`.../github/OWNER/REPO/blob/<branch>/x.ipynb`)
+  รองรับ branch ที่มี `/`, `%2F` (URL-encode), query string และคืน `("", "")` เมื่อไม่ใช่ลิงก์ GitHub
+- `_detect_source()` ลำดับการเดา: URL ของแท็บ (ผ่าน `google.colab.output.eval_js`) → `git rev-parse --abbrev-ref HEAD`
+  ของ `/content/Colab` หรือ `./Colab` หรือ cwd → ไม่ได้ก็ปล่อยว่าง (แล้วใช้ fallback เดิม: branch หลัก → PR ที่เปิดอยู่)
+- ฟอร์ม: `REPO_SLUG`/`REPO_BRANCH` ปล่อยว่างได้, `DEFAULT_SLUG` เป็นค่าสุดท้าย, พิมพ์ `🌿 ใช้ <slug> @ <branch>` ให้เห็นว่าเลือกอะไร
+- เทสต์ `branch auto-detect`: parse 4 รูปแบบ URL + เคสไม่มี URL (ถอยไปอ่าน git ของ clone)
+- ทดสอบจริง: วาง repo จำลองที่ `content/Colab` แล้วเรียก `_detect_source()` → ได้ `('', 'arena/e076c6f4-colab')`
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
