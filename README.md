@@ -179,6 +179,7 @@ ruff check strata tools           # lint
 | `FileNotFoundError: strata/templates/flake.nix` | แก้แล้ว: เทมเพลตย้ายไปอยู่ในโค้ด (`strata/flake_template.py`) ไม่มีไฟล์ภายนอกให้หายอีก — ถ้า clone เดิมยังพัง ให้รันเซลล์ 1 v6 (จะ `git reset --hard` ให้เอง) |
 | `RuntimeError: clone ... แล้วไม่พบแพ็กเกจ strata/` | ทุก branch ที่ลองไม่มีโค้ด — ใส่ชื่อ branch ในช่อง `REPO_BRANCH` ให้ตรง (เช่น branch ของ PR) หรือ merge PR เข้า branch หลัก |
 | อยากใช้ branch อื่น (frok/PR) | เติม `REPO_SLUG=owner/repo` และ `REPO_BRANCH=ชื่อ branch` ในฟอร์มเซลล์ 1 — เว้นว่าง = เดาให้ |
+| `version 'GLIBC_ABI_DT_X86_64_PLT' not found` ตอนสตาร์ท llama-server | ไบนารี prebuilt ไปหยิบ glibc ของ Nix — โค้ดใหม่ตัด `/nix/store` ออกจาก `LD_LIBRARY_PATH` ใน wrapper + `server_env()` ให้แล้ว (ลบ `/usr/local/bin/llama-server` แล้วติดตั้งใหม่ถ้าเป็น wrapper เก่า) |
 | `nix develop` ล้มเหลว (exit 1) | ข้อความ error จะแนบ stderr ท้ายให้แล้ว + พิมพ์ `nix_diagnostics()`; สาเหตุพบบ่อย: flake อยู่ใน git repo ที่ยังไม่ track ไฟล์ (โค้ดใหม่เขียน flake ไปที่ `$STRATA_HOME/flake` แล้ว) |
 | `/bin/bash: download-deepseek: command not found` | devshell ยังไม่ถูก activate — รัน `from strata.bootstrap import ensure_environment; ensure_environment()` แล้วดู `env['missing_tools']` (โค้ดใหม่จะถอยไปใช้ `hf`/`huggingface_hub` ให้เอง) |
 | `ModuleNotFoundError: No module named 'strata'` | เกิดเมื่อรันเซลล์ที่ 2 ก่อนเซลล์ที่ 1 หรือ clone ไม่สำเร็จ — รันเซลล์ 1 ใหม่ (จะมีข้อความ `📂 ใช้โค้ดจาก: ...`) และถ้าทดสอบ branch/PR ให้ใส่ชื่อ branch ในช่อง `REPO_BRANCH` |

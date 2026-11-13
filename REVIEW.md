@@ -187,6 +187,23 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🐞 P0 (รอบ 5): llama-server ตายเพราะ glibc ของ Nix ชนกับของระบบ
+
+`llama-server` (prebuilt binary) รันด้วย `LD_LIBRARY_PATH` ที่มี `/nix/store/…/glibc-2.44/lib` ต่อท้าย
+→ `libdl.so.2`/`libpthread.so.0` ของ Nix ไปขอ symbol `GLIBC_ABI_DT_X86_64_PLT` จาก `libc.so.6` ของ Ubuntu 22.04 (2.35)
+ที่ไม่มีให้ → `not found` ทุกโหมด fallback
+
+- `sanitize_ld_library_path()` + `server_env()`: ตัด path ใน `/nix/store` ออก, ถอด `LD_PRELOAD` ที่ชี้เข้า store
+  แล้วส่ง `env=server_env()` ให้ `subprocess.Popen`
+- wrapper `/usr/local/bin/llama-server` เวอร์ชันใหม่ (`WRAPPER_REV`) กรอง `/nix/store` ใน bash ด้วย
+  (ใช้ `printf "%s\n"` ก่อน `tr` เพื่อไม่ให้บรรทัดสุดท้ายหายจาก gotcha ของ `read`)
+  และติดตั้งทับ wrapper เก่าอัตโนมัติถ้ายังหาไบนารีเดิมเจอ (ไม่ต้องโหลดซ้ำ)
+- `start_error_hint()` แนบคำใบ้ท้าย error: glibc / CUDA / อื่น ๆ
+- เทสต์: `prebuilt libc isolation (glibc)` — sanitize, server_env, hint และรัน wrapper จริงกับไบนารีปลอม
+  ยืนยันว่า `/nix/store` ไม่อยู่ใน env ของ process ลูกและ `LD_PRELOAD` ถูกถอด
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

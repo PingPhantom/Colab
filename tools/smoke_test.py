@@ -902,6 +902,47 @@ def test_activate_devshell_errors() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_prebuilt_glibc_isolation() -> None:
+    """llama-server ต้องไม่หยิบ lib ของ Nix (glibc 2.44) มาปนกับ libc ของระบบ — ไม่งั้น GLIBC_ABI... not found"""
+    from strata import server as sv
+
+    raw = "/usr/local/cuda/lib64:/nix/store/abc/lib:/usr/lib64-nvidia:/nix/store/x/lib"
+    assert sv.sanitize_ld_library_path(raw) == "/usr/local/cuda/lib64:/usr/lib64-nvidia", "ต้องตัด /nix/store ออก"
+    assert sv.sanitize_ld_library_path(None) == ""
+    assert sv.sanitize_ld_library_path("/a:/a:/b") == "/a:/b", "ต้องตัดค่าซ้ำ"
+
+    env = sv.server_env(
+        {"LD_LIBRARY_PATH": "/nix/store/glibc/lib:/usr/local/cuda/lib64", "LD_PRELOAD": "/nix/store/y/pre.so", "PATH": "/bin"}
+    )
+    assert "/nix/store" not in env["LD_LIBRARY_PATH"], f"LD_LIBRARY_PATH ยังมีของ Nix: {env['LD_LIBRARY_PATH']}"
+    assert "LD_PRELOAD" not in env, "LD_PRELOAD ที่ชี้เข้า store ต้องถูกถอด"
+    assert env["PATH"] == "/bin", "ต้องไม่แตะ env อื่น"
+
+    assert "glibc" in sv.start_error_hint("x: version `GLIBC_ABI_DT_X86_64_PLT' not found"), "ต้องมี hint glibc"
+    assert "CUDA" in sv.start_error_hint("ggml_cuda_init: no CUDA device"), "ต้องมี hint CUDA"
+    assert sv.start_error_hint("ออกจากหน่วยความจำไม่พอ") == "", "ข้อความอื่นไม่ต้องมี hint"
+
+    # wrapper ต้องกรอง path ของ Nix จริงตอนรัน (ทดสอบด้วยไบนารีปลอม)
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        fake = tmp / "llama-server"
+        fake.write_text('#!/bin/sh\necho "LD=$LD_LIBRARY_PATH"\necho "PRELOAD=${LD_PRELOAD:-none}"\n', encoding="utf-8")
+        fake.chmod(0o755)
+        wrapper = sv._write_wrapper(fake, tmp, tmp / "wrapper.sh")
+        text = wrapper.read_text(encoding="utf-8")
+        assert sv.WRAPPER_REV in text, "wrapper ต้องมี marker ไว้ตรวจเวอร์ชัน"
+        assert "/nix/store/*" in text, "wrapper ต้องมีตัวกรอง /nix/store"
+        assert text.startswith("#!/usr/bin/env bash"), "wrapper ต้องเป็น bash (ใช้ process substitution)"
+
+        run_env = dict(os.environ, LD_LIBRARY_PATH="/nix/store/glibc/lib:/usr/local/cuda/lib64:/usr/lib64-nvidia", LD_PRELOAD="/nix/store/x/pre.so")
+        out = subprocess.run([str(wrapper)], capture_output=True, text=True, env=run_env, timeout=30).stdout
+        assert "/nix/store" not in out, f"wrapper ยังส่ง path ของ Nix ต่อ: {out}"
+        assert "PRELOAD=none" in out, f"wrapper ต้อง unset LD_PRELOAD: {out}"
+        assert str(tmp) in out, f"wrapper ต้องใส่โฟลเดอร์ไบนารีเอง: {out}"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -922,6 +963,7 @@ def main() -> int:
     check("server lock guard", test_server_lock_guard)
     check("network monitor (DL/UL)", test_network_monitor)
     check("downloader fallback", test_downloader_fallback)
+    check("prebuilt libc isolation (glibc)", test_prebuilt_glibc_isolation)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
     check("stale module purge", test_purge_modules)
     check("branch auto-detect", test_branch_autodetect)

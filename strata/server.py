@@ -34,6 +34,48 @@ if TYPE_CHECKING:  # openai ถูก import ตอนเรียกใช้�
 
 LLAMA_SERVER_PROC: subprocess.Popen | None = None
 
+NIX_STORE = "/nix/store/"
+WRAPPER_REV = "# strata-wrapper-v2"  # v2 = กรอง /nix/store ออกจาก LD_LIBRARY_PATH (glibc ของ Nix ชนกับระบบ)
+
+
+def sanitize_ld_library_path(value: str | None) -> str:
+    """ตัด path ของ Nix ออกจาก LD_LIBRARY_PATH
+
+    ไบนารี prebuilt (llama-server) ต้องใช้ glibc ของระบบ — ถ้าไปหยิบ libc/libdl ของ Nix
+    จะได้ error `version 'GLIBC_ABI_DT_X86_64_PLT' not found`
+    """
+    keep: list = []
+    for part in (value or "").split(os.pathsep):
+        p = part.strip()
+        if not p or p.startswith(NIX_STORE) or p in keep:
+            continue
+        keep.append(p)
+    return os.pathsep.join(keep)
+
+
+def server_env(base: dict | None = None) -> dict:
+    """env สำหรับรันไบนารี prebuilt: ไม่มี lib ของ Nix และไม่มี LD_PRELOAD ที่ชี้เข้า store"""
+    env = dict(os.environ if base is None else base)
+    env["LD_LIBRARY_PATH"] = sanitize_ld_library_path(env.get("LD_LIBRARY_PATH"))
+    if NIX_STORE in (env.get("LD_PRELOAD") or ""):
+        env.pop("LD_PRELOAD", None)
+    return env
+
+
+def start_error_hint(tail: str) -> str:
+    """แนบคำใบ้ให้แก้ได้เองเมื่อ server ตายเพราะ lib ไม่เข้ากัน"""
+    text = tail or ""
+    if "GLIBC" in text:
+        return (
+            "\n💡 ไบนารี prebuilt หยิบ glibc ของ Nix มาผสมกับของระบบ — โค้ดนี้ตัด path `/nix/store` "
+            "ออกจาก LD_LIBRARY_PATH ให้แล้ว ถ้ายังเจอให้ลบ /usr/local/bin/llama-server แล้วกดติดตั้งใหม่ "
+            "(wrapper จะถูกสร้างพร้อมตัวกรอง)"
+        )
+    if "CUDA" in text or "cuda" in text:
+        return "\n💡 ตรวจว่า Colab เปิด GPU อยู่ (Runtime → Change runtime type → GPU) และไดรเวอร์ CUDA ยังทำงาน"
+    return ""
+
+
 def check_disk_space(target_dir: str = "/content", required_gb: float | None = None) -> dict:
     cp = Path(target_dir)
     while not cp.exists() and cp != cp.parent:
@@ -77,12 +119,40 @@ def check_gpu_and_recommend(gb_per_layer: float = 0.5, kv_headroom_gb: float = 2
         Console().print(f"🎮 [bold green]GPU:[/bold green] {names} | VRAM ว่าง {fv:.2f}/{tv:.2f} GB | RAM ว่าง {ram_a:.1f} GB")
     return {"has_gpu": True, "gpu_name": names, "vram_total_gb": tv, "vram_free_gb": fv, "ram_total_gb": ram_t, "ram_avail_gb": ram_a, "recommended_gpu_layers": layers, "recommended_ctx_size": ctx, "recommended_threads": threads}
 
+def _write_wrapper(srv_bin: Path, dest: Path, wrapper: Path = Path("/usr/local/bin/llama-server")) -> Path:
+    """สร้าง wrapper ที่ตัด path ของ Nix ออกจาก LD_LIBRARY_PATH ก่อนรันไบนารี prebuilt"""
+    lib_dirs = os.pathsep.join(sorted({str(p.parent) for p in dest.rglob("*.so*")}))
+    base = [d for d in (NVIDIA_LIB_DIRS, lib_dirs, str(srv_bin.parent)) if d]
+    body = (
+        "#!/usr/bin/env bash\n"
+        f"{WRAPPER_REV}\n"
+        "# ลบ lib ของ Nix ออกจาก LD_LIBRARY_PATH (glibc ของ Nix ไม่เข้ากับไบนารี prebuilt)\n"
+        "unset LD_PRELOAD\n"
+        '_keep=""\n'
+        'while IFS= read -r _p; do\n'
+        '  case "$_p" in /nix/store/*) continue;; esac\n'
+        '  _keep="${_keep:+$_keep:}$_p"\n'
+        'done < <(printf "%s\\n" "${LD_LIBRARY_PATH:-}" | tr ":" "\\n")\n'
+        f'export LD_LIBRARY_PATH="{os.pathsep.join(base)}${{_keep:+:$_keep}}"\n'
+        f'exec "{srv_bin}" "$@"\n'
+    )
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.unlink(missing_ok=True)
+    wrapper.write_text(body, encoding="utf-8")
+    wrapper.chmod(0o755)
+    return wrapper
+
+
 def install_llama_server(install_dir: str = "/content/.llama-cpp") -> str:
     wrapper = Path("/usr/local/bin/llama-server")
     if wrapper.exists():
         wtxt = wrapper.read_text(encoding="utf-8", errors="ignore")
         if ("\\" + S) in wtxt:
             wrapper.write_text(wtxt.replace("\\" + S, S), encoding="utf-8"); wrapper.chmod(0o755)
+        old_bins = sorted(q for q in Path(install_dir).rglob("llama-server") if q.is_file())
+        if WRAPPER_REV not in wtxt and old_bins:  # wrapper เก่า (ไม่มีตัวกรอง /nix/store) -> เขียนใหม่
+            rprint("[dim]🔧 อัปเดต wrapper llama-server (ตัด lib ของ Nix ออกจาก LD_LIBRARY_PATH)[/dim]")
+            return str(_write_wrapper(old_bins[0], Path(install_dir), wrapper))
         if subprocess.run([str(wrapper), "--version"], capture_output=True).returncode == 0:
             return str(wrapper)
     rprint("[bold cyan]⏳ กำลังติดตั้ง Prebuilt llama-server (CUDA 12)...[/bold cyan]")
@@ -121,10 +191,7 @@ def install_llama_server(install_dir: str = "/content/.llama-cpp") -> str:
     if not srv_bins:
         raise RuntimeError("ไม่พบไบนารี llama-server")
     srv_bin = next(iter(srv_bins)); srv_bin.chmod(0o755)
-    lib_dirs = ":".join(sorted({str(p.parent) for p in dest.rglob("*.so*")}))
-    wrapper.unlink(missing_ok=True)
-    wrapper.write_text(f'#!/usr/bin/env bash\nexport LD_LIBRARY_PATH="{NVIDIA_LIB_DIRS}:{lib_dirs}:{srv_bin.parent}:{S}{{LD_LIBRARY_PATH:-}}"\nexec "{srv_bin}" "{S}@"\n', encoding="utf-8")
-    wrapper.chmod(0o755)
+    _write_wrapper(srv_bin, dest, wrapper)
     rprint(f"[bold green]✅ ติดตั้ง llama-server สำเร็จ ({main_asset['name']})![/bold green]")
     return str(wrapper)
 
@@ -404,12 +471,16 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
         cmd_run, lbl_run = _build_cmd(target_eff)
         rprint(f"[bold cyan]🚀 เปิด llama-server (:{port}):[/bold cyan] [yellow]{main_gguf.name}[/yellow] ({size_gb:.2f}GB) • [magenta]{lbl_run}[/magenta]")
         with open(LLAMA_LOG_FILE, "w", encoding="utf-8") as log_f:
-            LLAMA_SERVER_PROC = subprocess.Popen(cmd_run, stdout=log_f, stderr=subprocess.STDOUT, text=True)
+            LLAMA_SERVER_PROC = subprocess.Popen(
+                cmd_run, stdout=log_f, stderr=subprocess.STDOUT, text=True, env=server_env()
+            )
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             if LLAMA_SERVER_PROC.poll() is not None:
                 tail = "\n".join(LLAMA_LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-25:])
-                return False, f"process จบตัวก่อนพร้อม (exit={LLAMA_SERVER_PROC.returncode})\n{tail}"
+                return False, (
+                    f"process จบตัวก่อนพร้อม (exit={LLAMA_SERVER_PROC.returncode})\n{tail}{start_error_hint(tail)}"
+                )
             is_ok, loaded_id = _check_server_online(port, ttl=0.0)
             if is_ok:
                 SPEC_STATE["active_label"] = lbl_run
