@@ -179,6 +179,7 @@ ruff check strata tools           # lint
 | `FileNotFoundError: strata/templates/flake.nix` | แก้แล้ว: เทมเพลตย้ายไปอยู่ในโค้ด (`strata/flake_template.py`) ไม่มีไฟล์ภายนอกให้หายอีก — ถ้า clone เดิมยังพัง ให้รันเซลล์ 1 v6 (จะ `git reset --hard` ให้เอง) |
 | `RuntimeError: clone ... แล้วไม่พบแพ็กเกจ strata/` | ทุก branch ที่ลองไม่มีโค้ด — ใส่ชื่อ branch ในช่อง `REPO_BRANCH` ให้ตรง (เช่น branch ของ PR) หรือ merge PR เข้า branch หลัก |
 | อยากใช้ branch อื่น (frok/PR) | เติม `REPO_SLUG=owner/repo` และ `REPO_BRANCH=ชื่อ branch` ในฟอร์มเซลล์ 1 — เว้นว่าง = เดาให้ |
+| `the argument has been removed` (`--draft-max`) | llama.cpp รุ่นใหม่เปลี่ยนเป็น `--spec-draft-n-max`/`--spec-ngram-mod-n-max` — โค้ดอ่าน `--help` ของไบนารีแล้วเลือกชื่อให้เอง และถ้ายังพังจะลองสตาร์ทแบบปิด spec ให้ |
 | ปุ่มไม่ตอบหลังโหลดโมเดลเสร็จ | เดิม `_act()` ปิดปุ่มทั้งหมดแล้วไม่เปิดคืน (แก้แล้ว: `_set_busy()` เปิดคืนใน `finally`) — ถ้าเจอในเซสชันเก่าให้รีเฟรชหน้าเว็บ/รันเซลล์ 2 ใหม่ |
 | VRAM เต็มทั้งที่ server Offline | process `llama-server` รอบก่อนยังไม่คืนหน่วยความจำ — โค้ดใหม่เก็บกวาดให้อัตโนมัติ (`release_gpu_memory()`) และบอกว่าใครถือ VRAM อยู่ (`gpu_memory_users()`); ถ้ายังไม่พอให้ Runtime → Restart session |
 | `version 'GLIBC_ABI_DT_X86_64_PLT' not found` ตอนสตาร์ท llama-server | ไบนารี prebuilt ไปหยิบ glibc ของ Nix — โค้ดใหม่ตัด `/nix/store` ออกจาก `LD_LIBRARY_PATH` ใน wrapper + `server_env()` ให้แล้ว (ลบ `/usr/local/bin/llama-server` แล้วติดตั้งใหม่ถ้าเป็น wrapper เก่า) |

@@ -72,6 +72,11 @@ def start_error_hint(tail: str) -> str:
             "ออกจาก LD_LIBRARY_PATH ให้แล้ว ถ้ายังเจอให้ลบ /usr/local/bin/llama-server แล้วกดติดตั้งใหม่ "
             "(wrapper จะถูกสร้างพร้อมตัวกรอง)"
         )
+    if "argument has been removed" in text:
+        return (
+            "\n💡 llama.cpp รุ่นนี้เปลี่ยนชื่อ option ของ speculative decoding — โค้ดจะลองสตาร์ทแบบปิด spec "
+            "ให้อัตโนมัติ (หรือเลือกโหมด 'off' ใน UI) แล้วจึงค่อยเปิดใหม่เมื่อชื่อ option ถูกต้อง"
+        )
     if "CUDA" in text or "cuda" in text:
         return "\n💡 ตรวจว่า Colab เปิด GPU อยู่ (Runtime → Change runtime type → GPU) และไดรเวอร์ CUDA ยังทำงาน"
     return ""
@@ -415,6 +420,31 @@ def release_gpu_memory(port: int | None = None, wait_s: float = 12.0) -> dict:
     return {"killed": killed + extra, "vram_free_gb": free}
 
 
+def resolve_draft_max_flag(help_txt: str, kind: str = "draft") -> str:
+    """ชื่อ option จำกัด token ของ speculative decoding ตามเวอร์ชัน llama.cpp
+
+    รุ่นใหม่เปลี่ยน `--draft-max` เป็น `--spec-draft-n-max` (draft/MTP) หรือ
+    `--spec-ngram-mod-n-max` (n-gram) และ *ปฏิเสธ* ชื่อเก่าด้วย "argument has been removed"
+    — ข้อความนั้นยังโผล่ใน `--help` จึงเช็กด้วย substring ตรง ๆ ไม่ได้
+    คืน "" ถ้าไม่มี option ที่ใช้ได้ (แล้วเราจะไม่ใส่ค่านี้เลย ปล่อยให้ server ใช้ default)
+    """
+    text = help_txt or ""
+    if "--spec-type" in text:  # llama.cpp รุ่นใหม่ (ใช้ชุด --spec-*)
+        order = (
+            ["--spec-ngram-mod-n-max", "--spec-draft-n-max"]
+            if kind == "ngram"
+            else ["--spec-draft-n-max", "--spec-ngram-mod-n-max"]
+        )
+        for flag in order:
+            if re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", text):
+                return flag
+        return ""
+    for flag in ("--draft-max", "--draft"):  # รุ่นเก่า
+        if re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", text):
+            return flag
+    return ""
+
+
 def _kill_server_on_port(port: int) -> list[int]:
     """ฆ่าเฉพาะ process llama-server ที่ฟังพอร์ตที่กำหนด (ไม่แตะ process อื่นในเครื่อง)"""
     killed: list[int] = []
@@ -537,18 +567,26 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
         if use_kv_q8 and "--cache-type-k" in help_txt:
             cmd.extend(["--cache-type-k", "q8_0", "--cache-type-v", "q8_0"])
 
-        dmax_flag = "--draft-max" if "--draft-max" in help_txt else "--draft"
         no_mm = False; lbl = "⏹️ ปิด Speculative"
         if target_eff == "mtp" and "--spec-type" in help_txt:
             dm = dmax_in if dmax_in > 0 else 2
-            cmd.extend(["--spec-type", "draft-mtp", dmax_flag, str(dm)]); no_mm = True; lbl = f"🚀 MTP (max={dm})"
+            dmax_flag = resolve_draft_max_flag(help_txt, "draft")
+            cmd.extend(["--spec-type", "draft-mtp", *([dmax_flag, str(dm)] if dmax_flag else [])])
+            no_mm = True; lbl = f"🚀 MTP (max={dm if dmax_flag else 'default'})"
         elif target_eff == "ngram" and "--spec-type" in help_txt:
             ng = "ngram-mod" if "ngram-mod" in help_txt else ("ngram-simple" if "ngram-simple" in help_txt else "ngram-cache")
             dm = dmax_in if dmax_in > 0 else 16
-            cmd.extend(["--spec-type", ng, dmax_flag, str(dm)]); lbl = f"📚 N-gram ({ng}, max={dm})"
+            dmax_flag = resolve_draft_max_flag(help_txt, "ngram")
+            cmd.extend(["--spec-type", ng, *([dmax_flag, str(dm)] if dmax_flag else [])])
+            lbl = f"📚 N-gram ({ng}, max={dm if dmax_flag else 'default'})"
         elif target_eff in ("draft_file", "draft_file_mtp") and has_draft:
             dm = dmax_in if dmax_in > 0 else (3 if target_eff == "draft_file_mtp" else 6)
-            cmd.extend(["--model-draft", dmodel_in, "-ngld", "99", dmax_flag, str(dm)])
+            dmax_flag = resolve_draft_max_flag(help_txt, "draft")
+            cmd.extend(["--model-draft", dmodel_in])
+            if "-ngld" in help_txt:
+                cmd.extend(["-ngld", "99"])
+            if dmax_flag:
+                cmd.extend([dmax_flag, str(dm)])
             if target_eff == "draft_file_mtp" and "--spec-type" in help_txt:
                 cmd.extend(["--spec-type", "draft-mtp"]); no_mm = True
             lbl = f"⚡ Draft ({Path(dmodel_in).name[:16]}.., max={dm})"
@@ -596,7 +634,11 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
         tail = "\n".join(LLAMA_LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-15:])
         return False, f"โหลดโมเดลเกิน {load_timeout} วินาที\n{tail}{start_error_hint(tail)}"
 
-    fallbacks = [eff_mode] + (["draft_file", "ngram"] if eff_mode == "draft_file_mtp" else (["ngram"] if eff_mode in ("mtp", "draft_file") else []))
+    fallbacks = [eff_mode] + (
+        ["draft_file", "ngram"] if eff_mode == "draft_file_mtp" else (["ngram"] if eff_mode in ("mtp", "draft_file") else [])
+    )
+    if eff_mode != "off":
+        fallbacks.append("off")  # ทางออกสุดท้าย: ปิด speculative decoding (option เปลี่ยนชื่อข้ามเวอร์ชัน)
     last_err = ""
     for idx, m_try in enumerate(dict.fromkeys(fallbacks)):
         if idx > 0:

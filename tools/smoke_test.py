@@ -999,6 +999,36 @@ def test_gpu_memory_preflight() -> None:
         sv.shutil.which = real_which
 
 
+def test_spec_flag_compat() -> None:
+    """llama.cpp รุ่นใหม่ถอด `--draft-max` -> ต้องเลือกชื่อ option ตาม `--help` ของไบนารีจริง"""
+    from strata import server as sv
+
+    new_help = (
+        "usage: llama-server [options]\n"
+        "  --spec-type {ngram-mod,ngram-simple,draft-mtp}\n"
+        "  --spec-draft-n-max N\n"
+        "  --spec-ngram-mod-n-max N\n"
+        "-dm, --draft-max N   the argument has been removed\n"
+    )
+    assert sv.resolve_draft_max_flag(new_help, "ngram") == "--spec-ngram-mod-n-max"
+    assert sv.resolve_draft_max_flag(new_help, "draft") == "--spec-draft-n-max"
+    assert sv.resolve_draft_max_flag(new_help, "mtp") == "--spec-draft-n-max"
+
+    # รุ่นเก่า (ยังไม่มีชุด --spec-*) ต้องยังใช้ --draft-max ได้
+    old_help = "-ngl N, --n-gpu-layers N\n-dm, --draft-max N\n--draft N\n"
+    assert sv.resolve_draft_max_flag(old_help, "ngram") == "--draft-max"
+    assert sv.resolve_draft_max_flag(old_help, "draft") == "--draft-max"
+
+    # มี --spec-type แต่ไม่มี option จำกัด token -> ต้องคืน "" (ไม่ใส่ flag ที่อาจถูกถอด)
+    assert sv.resolve_draft_max_flag("--spec-type draft-mtp\n", "ngram") == ""
+    assert sv.resolve_draft_max_flag("", "draft") == "", "ไม่มี help ต้องไม่เดา"
+
+    # ต้องไม่หลงจับ --draft-max ตอนขอ --draft
+    assert sv.resolve_draft_max_flag("-dm, --draft-max N\n", "draft") == "--draft-max"
+    hint = sv.start_error_hint('error while handling argument "--draft-max": the argument has been removed')
+    assert "speculative" in hint.lower() or "spec" in hint.lower(), f"ต้องมี hint เรื่อง option: {hint}"
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -1021,6 +1051,7 @@ def main() -> int:
     check("downloader fallback", test_downloader_fallback)
     check("prebuilt libc isolation (glibc)", test_prebuilt_glibc_isolation)
     check("GPU memory preflight", test_gpu_memory_preflight)
+    check("spec flag compatibility", test_spec_flag_compat)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
     check("stale module purge", test_purge_modules)
     check("branch auto-detect", test_branch_autodetect)

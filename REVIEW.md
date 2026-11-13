@@ -232,6 +232,21 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🐞 P0 (รอบ 7): llama.cpp ถอด `--draft-max` → server ตายทุกโหมด
+
+release ใหม่ตอบกลับ `error while handling argument "--draft-max": the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max`
+และข้อความ "removed" นี้ยังปรากฏใน `--help` ด้วย จึงเช็กแบบ substring ตรง ๆ ไม่ได้ (เดิมใช้ `"--draft-max" in help_txt`)
+
+- `resolve_draft_max_flag(help_txt, kind)`: ถ้า help มีชุด `--spec-*` → เลือก `--spec-ngram-mod-n-max` (n-gram)
+  หรือ `--spec-draft-n-max` (draft/MTP) ตามชนิด; ถ้าไม่มี option ที่ใช้ได้คืน `""` แล้ว *ไม่ใส่ flag* (ปล่อย default)
+  ใช้ regex มี lookaround กัน `--draft` ไป match `--draft-max`
+- `_build_cmd()` ใช้ตัวเลือกนี้ทุกโหมด (mtp / ngram / draft_file / draft_file_mtp) และการ์ด `-ngld` ด้วย `--help`
+- `fallbacks` ต่อท้ายด้วย `"off"`: ถ้า spec ทุกแบบล้ม จะสตาร์ทแบบไม่เปิด speculative เป็นทางออกสุดท้าย
+- `start_error_hint()` รู้จักข้อความ "argument has been removed" และอธิบายว่าอะไรเกิดขึ้น
+- เทสต์ `spec flag compatibility`: help รุ่นใหม่/รุ่นเก่า/ไม่มี option/ไม่มี help + hint
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
