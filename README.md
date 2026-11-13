@@ -25,8 +25,8 @@
 ## 🚀 เริ่มใช้ (Colab)
 
 1. เปิด [`nix.ipynb`](./nix.ipynb) ใน Colab (เลือก Runtime → GPU) — เปิดไฟล์เดี่ยว ๆ ได้เลย
-   เซลล์แรกจะ **clone รีโปให้อัตโนมัติ** ถ้ายังไม่มีแพ็กเกจ `strata/` — ไล่ลำดับ branch หลัก → branch ของ PR ที่เปิดอยู่
-   (ถ้าอยากล็อก branch เอง ใส่ชื่อในช่อง `REPO_BRANCH`)
+   เซลล์แรกจะ **clone หรืออัปเดตโค้ดให้อัตโนมัติ** — ไล่ลำดับ branch ปัจจุบัน → branch หลัก → branch ของ PR ที่เปิดอยู่
+   (`AUTO_UPDATE=True` = `git fetch --depth 1` + `reset --hard` ให้ตรง GitHub ทุกครั้ง; ล็อก branch เองได้ที่ `REPO_BRANCH`)
 2. รันเซลล์ **1) ติดตั้งสภาพแวดล้อม** — ติดตั้ง Nix (ปักหมุด nixpkgs), devshell, และ `.venv` ตาม `pyproject.toml`
 3. รันเซลล์ **2) เปิด Studio UI** — เปิด UI ที่พอร์ต `18080` (ไม่ชนกับพอร์ต 8080 ของ Colab)
 4. แท็บแรก → กด **📥 โหลด** โมเดลที่ต้องการ → **🚀 รัน & แชท** → ไปคุยที่แท็บ 2
@@ -175,7 +175,7 @@ ruff check strata tools           # lint
 
 | อาการ | สาเหตุ/วิธีแก้ |
 | --- | --- |
-| `FileNotFoundError: strata/templates/flake.nix` | เคยเกิดจาก `.gitignore` กว้างเกิน (แก้แล้ว) — ถ้าเจออีกให้ `git ls-files strata` เช็กว่าไฟล์ถูก track |
+| `FileNotFoundError: strata/templates/flake.nix` | แก้แล้ว: เทมเพลตย้ายไปอยู่ในโค้ด (`strata/flake_template.py`) ไม่มีไฟล์ภายนอกให้หายอีก — ถ้า clone เดิมยังพัง ให้รันเซลล์ 1 v6 (จะ `git reset --hard` ให้เอง) |
 | `RuntimeError: clone ... แล้วไม่พบแพ็กเกจ strata/` | ทุก branch ที่ลองไม่มีโค้ด — ใส่ชื่อ branch ในช่อง `REPO_BRANCH` ให้ตรง (เช่น branch ของ PR) หรือ merge PR เข้า branch หลัก |
 | `ModuleNotFoundError: No module named 'strata'` | เกิดเมื่อรันเซลล์ที่ 2 ก่อนเซลล์ที่ 1 หรือ clone ไม่สำเร็จ — รันเซลล์ 1 ใหม่ (จะมีข้อความ `📂 ใช้โค้ดจาก: ...`) และถ้าทดสอบ branch/PR ให้ใส่ชื่อ branch ในช่อง `REPO_BRANCH` |
 | `ติดตั้ง Nix` ค้าง/ช้า | Colab บางรอบเน็ตช้า ลองรันเซลล์ 1 ใหม่ (ขั้นตอนที่ทำแล้วจะถูกข้าม) |

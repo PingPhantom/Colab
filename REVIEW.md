@@ -125,6 +125,21 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🩹 P0 (รอบ 2): โค้ดเก่าค้างใน clone เดิม + เทมเพลตหาย
+
+หลังแก้ `.gitignore` แล้ว ผู้ใช้ยังเจอ `FileNotFoundError` เดิม เพราะ `/content/Colab` เป็น clone เก่า
+ที่ยังไม่มีไฟล์นั้น และเซลล์ 1 เวอร์ชันก่อน ๆ ไม่ยอมอัปเดตมัน
+
+- **เทมเพลตย้ายเข้าโค้ด**: `strata/flake_template.py` เก็บ flake เป็นสตริง — ลบโฟลเดอร์ `strata/templates/`
+  ออกทั้งอัน (ไม่มีไฟล์ภายนอกให้หลุด track หรือหายตอน clone อีก), `bootstrap.FLAKE_TEMPLATE` เป็น `str` แล้ว
+- **เซลล์ 1 v6-auto-update**: ถ้ามี `/content/Colab` เป็น git repo → `git fetch --depth 1` + `git reset --hard FETCH_HEAD`
+  ก่อนเสมอ (ref: branch ปัจจุบัน → branch หลัก → branch ของ PR), ปิดได้ด้วย `AUTO_UPDATE=False`
+  แล้วค่อย fallback ไป clone ใหม่ถ้าอัปเดตไม่ได้
+- เทสต์เพิ่ม: ลำดับ ref ของ `_refresh`, กรณี fetch ล้มทุก ref → คืน `False` ให้ไป clone, และ `AUTO_UPDATE=False` ต้องไม่ fetch
+- ทดสอบกับ git จริง (จำลอง clone เก่าโดยลบไฟล์): `🔄 อัปเดตโค้ดเดิมเป็น branch ล่าสุด เรียบร้อย` → ไฟล์กลับมา → `write_flake()` ผ่าน
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
