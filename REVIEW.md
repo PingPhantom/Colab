@@ -88,6 +88,20 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🔧 แก้เพิ่ม: Colab เปิด notebook เดี่ยว ๆ แล้ว `ModuleNotFoundError: No module named 'strata'`
+
+เดิมทั้งเซลล์รวมโค้ดไว้ในตัว notebook แต่หลังแยกเป็นแพ็กเกจ `strata/` การเปิด notebook จาก GitHub
+ใน Colab จะไม่มีโฟลเดอร์โค้ดอยู่ในเครื่อง (cwd = `/content`) จึง import ไม่เจอ
+
+- เซลล์ 1 มี `_ensure_repo()`: หา `strata/__init__.py` จาก cwd ขึ้นไป ถ้าไม่พบจะ `git clone --depth 1`
+  ไปที่ `/content/Colab` (ลบของค้างก่อน), `chdir` เข้ารากรีโป แล้วจึง import `strata.bootstrap`
+- เพิ่มช่อง `REPO_SLUG` / `REPO_BRANCH` (Colab form) สำหรับ fork หรือทดสอบ branch/PR
+- ถ้า clone แล้วยังไม่เจอ `strata/` (เช่น branch หลักยังไม่ merge) จะได้ error บอกให้ใส่ `REPO_BRANCH`
+- เซลล์ 2 มี guard: ถ้ารันข้ามเซลล์จะบอกให้รันเซลล์ 1 ก่อน
+- เทสต์: `test_notebook_repo_bootstrap` (ตรวจกรณีมีโค้ดอยู่แล้ว / ต้อง clone / ของค้างต้องถูกลบ)
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

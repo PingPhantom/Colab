@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
 import re
 import shutil
 import struct
@@ -482,6 +483,80 @@ def test_network_monitor() -> None:
     assert _fmt_rate(-5) == "0 B/s", "ค่าติดลบต้องถูก clamp"
 
 
+def test_notebook_repo_bootstrap() -> None:
+    """เซลล์ setup ต้องหา/โคลนรีโปเองได้ (ไม่งั้นเปิด notebook เดี่ยว ๆ ใน Colab จะ ModuleNotFoundError)"""
+    nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    src = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    tree = ast.parse(src)
+    node = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_ensure_repo"), None)
+    assert node is not None, "ไม่พบฟังก์ชัน _ensure_repo ในเซลล์ setup"
+
+    if Path("/content").exists():
+        raise Skip("มี /content อยู่ในเครื่องนี้ (จำลอง Colab ไม่ได้)")
+
+    tmp = Path(tempfile.mkdtemp())
+    calls: list[list[str]] = []
+
+    class _OK:
+        returncode = 0
+
+    def fake_run(cmd, check=False, env=None, **kw):  # noqa: ANN001
+        calls.append(list(cmd))
+        target = Path(cmd[-1])
+        (target / "strata").mkdir(parents=True, exist_ok=True)
+        (target / "strata" / "__init__.py").write_text("")
+        return _OK()
+
+    fake_subprocess = type("subprocess", (), {"run": staticmethod(fake_run)})
+    ns = {"Path": Path, "os": __import__("os"), "shutil": shutil, "subprocess": fake_subprocess, "__name__": "shim"}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "<shim>", "exec"), ns)  # noqa: S102
+    ensure_repo = ns["_ensure_repo"]
+
+    try:
+        # 1) มีแพ็กเกจอยู่ใน cwd แล้ว -> ต้องไม่ clone
+        work = tmp / "repo"
+        (work / "strata").mkdir(parents=True)
+        (work / "strata" / "__init__.py").write_text("")
+        old_cwd = Path.cwd()
+        os.chdir(work)
+        try:
+            assert ensure_repo("org/repo", "") == work.resolve() or ensure_repo("org/repo", "").resolve() == work.resolve()
+        finally:
+            os.chdir(old_cwd)
+        assert not calls, f"ไม่ควร clone เมื่อมีแพ็กเกจอยู่แล้ว: {calls}"
+
+        # 2) ไม่มีแพ็กเกจ -> clone (พร้อม --branch ถ้าระบุ)
+        bare = tmp / "bare"
+        bare.mkdir()
+        os.chdir(bare)
+        try:
+            got = ensure_repo("org/repo", "feature/x")
+            assert got == bare / "Colab" or got == Path("/content/Colab"), f"ปลายทางผิด: {got}"
+        finally:
+            os.chdir(old_cwd)
+        assert len(calls) == 1, f"ควรเรียก clone ครั้งเดียว ได้ {calls}"
+        cmd = calls[0]
+        assert cmd[0] == "git" and cmd[1] == "clone" and "--depth" in cmd, f"คำสั่ง clone ผิด: {cmd}"
+        assert "--branch" in cmd and "feature/x" in cmd, f"ต้องส่ง branch ที่ขอ: {cmd}"
+        assert any(str(c).startswith("https://github.com/org/repo") for c in cmd), f"URL ผิด: {cmd}"
+
+        # 3) ปลายทางมีของเก่าค้าง (ไม่มี strata) -> ต้องลบทิ้งแล้ว clone ใหม่
+        stale = tmp / "stale"
+        (stale / "Colab").mkdir(parents=True)
+        (stale / "Colab" / "junk.txt").write_text("x")
+        calls.clear()
+        os.chdir(stale)
+        try:
+            ensure_repo("org/repo", "")
+        finally:
+            os.chdir(old_cwd)
+        assert calls, "ต้อง clone ใหม่เมื่อของเดิมเสีย"
+        assert not (stale / "Colab" / "junk.txt").exists(), "ของเก่าค้างต้องถูกลบก่อน clone"
+    finally:
+        os.chdir(Path.cwd())
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -501,6 +576,7 @@ def main() -> int:
     check("StrataRAG dedup/search/persist", test_rag_dedup_search_persist)
     check("server lock guard", test_server_lock_guard)
     check("network monitor (DL/UL)", test_network_monitor)
+    check("notebook repo bootstrap", test_notebook_repo_bootstrap)
     if FAILURES:
         print(f"\n❌ ล้มเหลว {len(FAILURES)} รายการ")
         return 1
