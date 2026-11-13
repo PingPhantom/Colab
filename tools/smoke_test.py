@@ -491,7 +491,10 @@ def test_notebook_repo_bootstrap() -> None:
     tree = ast.parse(src)
     funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
     names = {f.name for f in funcs}
-    for need in ("_ensure_repo", "_refresh", "_pr_branches", "_ok"):
+    assert "strata.bootstrap import" in src and src.index("_purge_modules()") < src.index(
+        "from strata.bootstrap import"
+    ), "ต้องล้างโมดูลที่ค้างก่อน import strata.* (ไม่งั้น git reset แล้วยังรันโค้ดเก่า)"
+    for need in ("_ensure_repo", "_refresh", "_pr_branches", "_ok", "_purge_modules"):
         assert need in names, f"ไม่พบฟังก์ชัน {need} ในเซลล์ setup (โหลดเซลล์เก่าอยู่?)"
     assert "NOTEBOOK_REV" in src, "เซลล์ setup ต้องมี marker NOTEBOOK_REV ให้เดาเวอร์ชันได้"
     keep = {"REQUIRED", "GIT_ENV", "NOTEBOOK_REV", "AUTO_UPDATE"}
@@ -744,6 +747,33 @@ def test_downloader_fallback() -> None:
         dl.shutil.which = real_which
 
 
+def test_purge_modules() -> None:
+    """หลัง git fetch/reset ต้องล้างโมดูล `strata.*` ที่ค้างใน kernel (ไม่งั้นยังรันไบต์โค้ดเก่า)"""
+    nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    src = "\n".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
+    tree = ast.parse(src)
+    node = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_purge_modules"), None)
+    assert node is not None, "ไม่พบ _purge_modules ในเซลล์ setup"
+    fn_src = ast.get_source_segment(src, node)
+
+    probe = '\n'.join(
+        [
+            "import importlib, sys, types",
+            fn_src,
+            'sys.modules["strata"] = types.ModuleType("strata")',
+            'sys.modules["strata.bootstrap"] = types.ModuleType("strata.bootstrap")',
+            'sys.modules["strata.ui"] = types.ModuleType("strata.ui")',
+            'sys.modules["other_pkg"] = types.ModuleType("other_pkg")',
+            "_purge_modules()",
+            'print("LEFT:", sorted(k for k in sys.modules if k == "strata" or k.startswith("strata.")))',
+            'print("KEPT:", "other_pkg" in sys.modules)',
+        ]
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    assert "LEFT: []" in out.stdout, f"ยังมีโมดูล strata ค้าง: {out.stdout}"
+    assert "KEPT: True" in out.stdout, f"ไม่ควรลบโมดูลของแพ็กเกจอื่น: {out.stdout}"
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -765,6 +795,7 @@ def main() -> int:
     check("network monitor (DL/UL)", test_network_monitor)
     check("downloader fallback", test_downloader_fallback)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
+    check("stale module purge", test_purge_modules)
     check("package files tracked by git", test_package_files_tracked)
     check("flake.nix from embedded template", test_flake_template)
     if FAILURES:
