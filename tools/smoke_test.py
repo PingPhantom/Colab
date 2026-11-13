@@ -184,13 +184,20 @@ def test_no_buggy_patterns() -> None:
 def test_perf_patterns() -> None:
     ui = package_sources()["ui.py"]
     tree = ast.parse(ui)
-    refresh = next(
-        ast.get_source_segment(ui, n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_refresh"
-    )
-    assert refresh, "ไม่พบ _refresh"
+    def _seg(name: str) -> str:
+        seg = next(
+            ast.get_source_segment(ui, n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name
+        )
+        assert seg, f"ไม่พบ {name}"
+        return seg
+
+    # _refresh() ห่อ _refresh_inner() ด้วย lock เพื่อกัน thread เรียลไทม์เขียนทับกัน
+    refresh = _seg("_refresh") + _seg("_refresh_inner")
     assert "_B(" not in refresh, "_refresh ต้องไม่สร้าง widget ใหม่ทุกครั้ง"
     assert 'rglob("*.gguf")' not in refresh, "_refresh ต้องใช้ _dir_stats() แบบ cache"
     assert "_dir_stats(" in refresh, "_refresh ควรใช้ _dir_stats() แบบ cache"
+    assert "with ui_lock:" in _seg("_refresh"), "ต้องมี lock กัน thread เรียลไทม์เขียนทับ UI"
+    assert "threading.RLock()" in ui, "ต้องสร้าง RLock สำหรับ ui_lock"
     assert "last_draw" in ui, "การสตรีมควร throttle การวาด HTML (~100ms)"
     rag = package_sources()["rag.py"]
     assert "min_score" in rag, "search() ควรกรองผลที่ score ต่ำเกินไป"

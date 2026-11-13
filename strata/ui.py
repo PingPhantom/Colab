@@ -20,6 +20,7 @@ from .config import (
     DEFAULT_RAG_PATH,
     DRAFT_CATALOG,
     DRAFT_DIR,
+    LLAMA_LOG_FILE,
     MODEL_CATALOG,
     MODEL_DIR,
     SPEC_STATE,
@@ -51,6 +52,7 @@ from .utils import (
     _fmt_rate,
     _invalidate_dir_cache,
     net_bandwidth,
+    recent_log,
 )
 
 
@@ -73,7 +75,47 @@ def _L(**kw) -> widgets.Layout:
 def _B(desc: str, style: str = "", w: str = "110px", **kw) -> widgets.Button:
     return widgets.Button(description=desc, button_style=style, layout=_L(width=w, **kw))
 
-def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, rag_engine: StrataRAG = GLOBAL_RAG):
+LIVE_REFS: list = []  # อ้างอิงตัวรีเฟรชล่าสุด (ให้เทสต์/ผู้ใช้เรียก run_once() ได้)
+
+
+class LiveRefresher:
+    """รีเฟรช UI แบบเรียลไทม์ใน thread แยก — เปิด/ปิดได้ และเรียก run_once() เพื่อทดสอบได้"""
+
+    def __init__(self, tick: Callable[[int], None], interval: float = 2.0):
+        self.tick = tick
+        self.interval = max(0.5, float(interval))
+        self.running = False
+        self.ticks = 0
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self.running = True
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="strata-live")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.running = False
+
+    def run_once(self) -> None:
+        with self._lock:  # กัน tick ซ้อนกัน (widget อัปเดตทีละครั้ง)
+            self.ticks += 1
+            self.tick(self.ticks)
+
+    def _loop(self) -> None:
+        while True:
+            time.sleep(self.interval)
+            if not self.running:
+                continue
+            try:
+                self.run_once()
+            except Exception:  # noqa: BLE001 — thread ต้องไม่ตายเพราะ widget ตัวใดตัวหนึ่ง
+                continue
+
+
+def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, rag_engine: StrataRAG = GLOBAL_RAG, live: bool = True):
     state = {"active": "ยังไม่ระบุ"}; history: list[dict] = []; btns: list[widgets.Button] = []
     header, rag_stat, spec_hint, c_stat, rag_out, a_stat = (widgets.HTML() for _ in range(6))
 
@@ -293,7 +335,13 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
             for k in ALL_PRESET_KEYS
         )
 
+    ui_lock = threading.RLock()
+
     def _refresh():
+        with ui_lock:
+            _refresh_inner()
+
+    def _refresh_inner():
         header.value = _header_html()
         cur_d = draft_dd.value; n_opts = _draft_opts(); draft_dd.options = n_opts
         if any(v == cur_d for _, v in n_opts):
@@ -326,7 +374,15 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
         spec_hint,
     ], layout=_L(padding="8px 12px", border="1px solid #334155", border_radius="10px", margin="0 0 6px 0", gap="5px"))
 
-    tab1 = widgets.VBox([widgets.HBox([b_all, b_cache, b_stat, b_stop, chk_del, b_delall, b_ref], layout=_L(flex_flow="row wrap", gap="5px")), rows_box, widgets.HBox([b_net, net_out], layout=_L(flex_flow="row wrap", gap="8px", align_items="center")), log_out])
+    b_live = _B("⏱ เรียลไทม์: เปิด", "success", "150px")
+    live_out = widgets.HTML()
+    tab1 = widgets.VBox([
+        widgets.HBox([b_all, b_cache, b_stat, b_stop, chk_del, b_delall, b_ref], layout=_L(flex_flow="row wrap", gap="5px")),
+        rows_box,
+        widgets.HBox([b_net, b_live, net_out], layout=_L(flex_flow="row wrap", gap="8px", align_items="center")),
+        live_out,
+        log_out,
+    ])
 
     # --- TAB 2: Chat + StrataRAG ---
     sys_in = widgets.Text(value="คุณคือผู้ช่วย AI อัจฉริยะที่ตอบชัดเจนและถูกต้อง", description="System:", layout=_L(flex="1 1 300px"))
@@ -506,5 +562,49 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
     tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4])
     for idx, ttl in enumerate(["📦 1. โมเดล & ดิสก์ (10 ตัว)", "💬 2. แชท + RAG", "📚 3. คลัง PDF RAG", "⚔️ 4. เปรียบเทียบโมเดล"]):
         tabs.set_title(idx, ttl)
+    live_ref = None
+
+    def _tick(n: int) -> None:
+        """อัปเดตหัว UI + แผง log ทุกคู่ และเดินดิสก์/แถวโมเดลทุก ~3 คู่"""
+        header.value = _header_html()
+        lines = recent_log(8)
+        tail: list[str] = []
+        try:
+            if LLAMA_LOG_FILE.exists():
+                tail = LLAMA_LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-6:]
+        except OSError:
+            tail = []
+        rows_html = "".join(f"<div>{html_lib.escape(x)}</div>" for x in [*lines, *tail][-10:])
+        live_out.value = (
+            "<div style='background:#0b1220;color:#94a3b8;font-family:ui-monospace,SFMono-Regular,monospace;"
+            "font-size:11px;line-height:1.5;padding:8px 10px;border-radius:8px;border:1px solid #334155;"
+            "max-height:150px;overflow:auto;'>"
+            f"<b style='color:#38bdf8;'>⏱ เรียลไทม์ (ทุก {live_ref.interval:.0f}s • tick {n})</b>"
+            f"{rows_html or '<div>(ยังไม่มี log)</div>'}</div>"
+        )
+        if n % 3 == 0:  # ทุก ~6 วินาที: คำนวณขนาดโฟลเดอร์/สถานะแถวใหม่
+            _refresh()
+
+    live_ref = LiveRefresher(_tick, interval=2.0)
+
+    def _toggle_live(_):
+        if live_ref.running:
+            live_ref.stop()
+            b_live.description = "⏸ เรียลไทม์: ปิด"
+            b_live.button_style = ""
+        else:
+            live_ref.start()
+            _tick(live_ref.ticks)
+            b_live.description = "⏱ เรียลไทม์: เปิด"
+            b_live.button_style = "success"
+
+    b_live.on_click(_toggle_live)
+
     _refresh()
-    display(widgets.VBox([header, spec_bar, tabs]))
+    _tick(1)  # เติมแผง log ครั้งแรกก่อนแสดงผล (n=1 ไม่ต้องเดินดิสก์ซ้ำ)
+    root = widgets.VBox([header, spec_bar, tabs])
+    display(root)
+    LIVE_REFS.append(live_ref)
+    if live:
+        live_ref.start()
+    return root

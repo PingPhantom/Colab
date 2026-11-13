@@ -247,6 +247,21 @@ release ใหม่ตอบกลับ `error while handling argument "--draf
 
 ---
 
+## ✨ ฟีเจอร์: UI แสดงผลแบบเรียลไทม์
+
+เดิมต้องกด 🔄 รีเฟรชเองทุกครั้งถึงจะเห็นสถานะ/ขนาดไฟล์/log ใหม่
+
+- `LiveRefresher` (thread daemon, 2s): อัปเดต `header` (ออนไลน์/ดิสก์/VRAM/RAG/⬇⬆) + แผง log ทุก tick,
+  เดิน `_refresh()` ทุก ~6s เพื่อคำนวณขนาดโฟลเดอร์ (ยังใช้ `_dir_stats()` cache)
+- `utils.LOG_RING` (deque 600) + `recent_log(n)`: `run_stream()` เก็บทุกบรรทัดที่พิมพ์ (รวม `$ cmd`/`(exit N)`)
+  ให้ UI หยิบมาแสดงสด; แผงยังแนบท้าย log ของ `llama-server` เมื่อมี
+- `_refresh()` ถูกห่อด้วย `ui_lock` (RLock) กัน thread เรียลไทม์กับ main thread เขียนทับกัน
+- ปุ่ม `⏱ เรียลไทม์: เปิด/ปิด` เปิด-ปิดได้ (`live=False` ตอนสร้าง UI = ไม่สตาร์ท thread, ใช้ในเทสต์)
+  และ `show_model_manager_ui()` คืน root widget กลับมาแล้ว (เดิมคืน `None`)
+- เทสต์ `รีเฟรช UI เรียลไทม์ + log สด`: `run_once()` เดิน tick, log ใหม่โผล่ในแผง, ปุ่มเปิด/ปิดได้จริง
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

@@ -9,9 +9,21 @@ import sys
 import tarfile
 import time
 import zipfile
+from collections import deque
 from pathlib import Path
 
 import requests
+
+LOG_RING: deque = deque(maxlen=600)  # บรรทัด log ล่าสุด (ให้ UI แสดงแบบเรียลไทม์)
+
+
+def recent_log(n: int = 12) -> list[str]:
+    """n บรรทัดล่าสุดจากคำสั่งที่รันผ่าน run_quiet/run_stream"""
+    return list(LOG_RING)[-int(n):]
+
+
+def _remember(line: str) -> None:
+    LOG_RING.append(str(line).rstrip("\n"))
 
 
 def run_quiet(cmd: str):
@@ -21,11 +33,14 @@ def run_quiet(cmd: str):
         raise subprocess.CalledProcessError(p.returncode, cmd)
 
 def run_stream(cmd: str):
+    _remember(f"$ {cmd}")
     p = subprocess.Popen(["/bin/bash", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     if p.stdout:
         for line in p.stdout:
+            _remember(line)
             print(line, end="")
     p.wait()
+    _remember(f"(exit {p.returncode})")
     if p.returncode != 0:
         raise subprocess.CalledProcessError(p.returncode, cmd)
 

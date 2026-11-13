@@ -1,3 +1,9 @@
+### ⏱ แสดงผลแบบเรียลไทม์
+- หัว UI (สถานะ server, ดิสก์, VRAM, RAG, ⬇/⬆) อัปเดตเองทุก **2 วินาที** ไม่ต้องกดรีเฟรช
+- แผง `⏱ เรียลไทม์` ท้ายแท็บ 1 แสดง log สด: คำสั่งที่รันผ่าน `run_stream()` + ท้าย log ของ `llama-server`
+- ทุก ~6 วินาทีจะเดินดิสก์/ขนาดโมเดลใหม่ (ใช้ `_dir_stats()` แบบ cache)
+- ปิด/เปิดได้ด้วยปุ่ม `⏱ เรียลไทม์: เปิด/ปิด` และเรียกทดสอบได้ผ่าน `strata.ui.LIVE_REFS[-1].run_once()`
+
 # 🎛️ Strata Studio
 
 <a href="https://colab.research.google.com/github/PingPhantom/Colab/blob/main/nix.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>

@@ -202,6 +202,31 @@ def main() -> int:
 
             check("แสดง DL/UL ใน header + ปุ่มวัดเรียลไทม์", check_network_widgets)
 
+            def check_live_refresh():
+                from strata.utils import _remember  # noqa: PLC0415
+
+                assert strata_ui.LIVE_REFS, "ไม่พบตัวรีเฟรชเรียลไทม์ (LIVE_REFS ว่าง)"
+                ref = strata_ui.LIVE_REFS[-1]
+                live_out = next(
+                    w for w in walk(displayed["root"]) if isinstance(w, widgets.HTML) and "เรียลไทม์ (ทุก" in str(w.value)
+                )
+                btn = next(b for b in all_w if isinstance(b, widgets.Button) and "⏱ เรียลไทม์" in b.description)
+
+                _remember("ทดสอบ log เรียลไทม์")
+                before = ref.ticks
+                ref.run_once()
+                assert ref.ticks == before + 1, "run_once ต้องเดิน tick"
+                assert "ทดสอบ log เรียลไทม์" in live_out.value, f"แผง log ไม่แสดงบรรทัดใหม่: {live_out.value[:200]}"
+
+                btn.click()
+                assert ref.running is False, "กดปิดแล้วตัวรีเฟรชต้องหยุด"
+                assert "ปิด" in btn.description, f"ปุ่มควรบอกว่าปิดอยู่: {btn.description}"
+                btn.click()
+                assert ref.running is True, "กดเปิดอีกครั้งต้องกลับมาทำงาน"
+                ref.stop()  # ไม่ให้ thread ค้างตอนจบเทสต์
+
+            check("รีเฟรช UI เรียลไทม์ + log สด", check_live_refresh)
+
             def check_rag_persistence():
                 path_in = next(w for w in walk(displayed["root"]) if isinstance(w, widgets.Text) and w.description == "ไฟล์คลัง:")
                 path_in.value = str(rag_path)
