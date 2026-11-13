@@ -186,9 +186,16 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
     b_all, b_cache, b_stat, b_stop, b_delall, b_ref = _B("📦 โหลดครบ 10 ตัว", "primary", "155px"), _B("🧹 ล้างแคช", "info", "105px"), _B("📡 สถานะ", "", "95px"), _B("🛑 หยุด Server", "warning", "115px"), _B("🗑️ ลบทั้งหมด", "danger", "105px"), _B("🔄 รีเฟรช", "", "88px")
     chk_del = widgets.Checkbox(value=False, description="ยืนยันลบทั้งหมด", indent=False, layout=_L(width="125px"))
 
-    def _act(fn: Callable, *a, active: str | None = None, tab: int | None = None, **kw):
+    busy = {"n": 0}
+
+    def _set_busy(flag: bool) -> None:
+        """ปิด/เปิดปุ่มทั้งหมดระหว่างทำงาน (นับซ้อนได้) — ต้องเปิดคืนเสมอ ไม่งั้นปุ่มค้าง disabled"""
+        busy["n"] = busy["n"] + 1 if flag else max(0, busy["n"] - 1)
         for b in btns:
-            b.disabled = True
+            b.disabled = busy["n"] > 0
+
+    def _act(fn: Callable, *a, active: str | None = None, tab: int | None = None, **kw):
+        _set_busy(True)
         with log_out:
             try:
                 fn(*a, **kw)
@@ -200,6 +207,7 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
                 rprint(f"[bold red]❌ {e}[/bold red]")
             finally:
                 _invalidate_dir_cache(); _invalidate_server_cache(port)
+                _set_busy(False)  # เปิดปุ่มคืนก่อน แล้ว _refresh() จะจัดสถานะรายแถวให้ถูกอีกที
                 _refresh()
 
     def _on_dl_draft(_):
@@ -246,7 +254,16 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
     b_cache.on_click(lambda _: _act(clean_download_cache, model_dir=model_dir))
     b_stat.on_click(lambda _: _act(strata_server_status, port=port))
     b_stop.on_click(lambda _: _act(stop_strata_server, active="หยุดแล้ว"))
-    b_delall.on_click(_on_del_all); b_ref.on_click(lambda _: _refresh())
+    b_delall.on_click(_on_del_all)
+
+    def _on_refresh(_):
+        # ต้องล้างแคชก่อน ไม่งั้นกดรีเฟรชหลังโหลดเสร็จจะเห็นขนาด/สถานะเก่า
+        _invalidate_dir_cache(); _invalidate_server_cache(port)
+        _refresh()
+        with log_out:
+            rprint("[dim]🔄 รีเฟรชสถานะโมเดล/ดิสก์แล้ว[/dim]")
+
+    b_ref.on_click(_on_refresh)
 
     rows: dict[str, dict] = {}
 

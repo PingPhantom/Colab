@@ -172,6 +172,22 @@ def main() -> int:
 
             check("ปุ่มในแถวโมเดลทำงานถูก", check_row_actions)
 
+            def check_buttons_reenabled():
+                ref = next(b for b in all_w if isinstance(b, widgets.Button) and "รีเฟรช" in b.description)
+                click("📥 โหลด")  # ผ่าน _act() -> ปิดปุ่มทั้งหมดชั่วคราว
+                assert ref.disabled is False, "หลังโหลดเสร็จปุ่มรีเฟรชต้องกลับมากดได้"
+                tops = [
+                    b for b in all_w
+                    if isinstance(b, widgets.Button)
+                    and b.description in ("📦 โหลดครบ 10 ตัว", "🧹 ล้างแคช", "📡 สถานะ", "🛑 หยุด Server", "🗑️ ลบทั้งหมด")
+                ]
+                stuck = [b.description for b in tops if b.disabled]
+                assert not stuck, f"ปุ่มค้าง disabled หลังทำงานเสร็จ: {stuck}"
+                click("🔄 รีเฟรช")
+                assert ref.disabled is False, "กดรีเฟรชแล้วปุ่มต้องยังใช้งานได้"
+
+            check("ปุ่มกลับมากดได้หลังทำงานเสร็จ", check_buttons_reenabled)
+
             def check_network_widgets():
                 header = next(
                     w for w in walk(displayed["root"]) if isinstance(w, widgets.HTML) and "Strata Studio (Port" in str(w.value)
