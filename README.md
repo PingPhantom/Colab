@@ -43,6 +43,23 @@
 >
 > แล้วรันเซลล์ 1 ต่อได้เลย (ขั้นตอนที่ทำไปแล้วจะถูกข้าม)
 
+> **ติด ๆ กัน: เซลล์ที่รันอยู่เป็นเวอร์ชันเก่า (banner ไม่ใช่ `v4-pr-fallback`)?**
+> ไม่ต้องโหลด notebook ใหม่ — วาง 9 บรรทัดนี้ในเซลล์ใหม่แทนเซลล์ 1 ได้เลย:
+>
+> ```python
+> %cd /content
+> !rm -rf /content/Colab
+> !git clone --depth 1 --branch arena/e076c6f4-colab https://github.com/PingPhantom/Colab.git /content/Colab
+> import os, sys
+> os.chdir("/content/Colab")
+> sys.path.insert(0, os.getcwd())
+> from strata.bootstrap import ensure_environment
+> env = ensure_environment()
+> print("✅ nixpkgs", env["nixpkgs"][:7])
+> ```
+>
+> แล้วเซลล์ 2 ใช้แค่ 3 บรรทัด: `from strata.notebook import launch, register_magics` → `register_magics()` → `ui = launch()`
+
 > ยังไม่ merge PR ก็ใช้ได้: เว้น `REPO_BRANCH` ว่างไว้ เซลล์ 1 จะหา branch ที่มีแพ็กเกจ `strata/` เอง
 > (ถาม GitHub API ว่า PR ไหนเปิดอยู่ แล้วไล่ `git clone --branch` ทีละตัว)
 > หรือเปิดตรง ๆ: `https://colab.research.google.com/github/PingPhantom/Colab/blob/arena/e076c6f4-colab/nix.ipynb`
