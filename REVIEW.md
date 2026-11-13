@@ -1,12 +1,13 @@
 # รีวิว & แผนปรับปรุง `nix.ipynb` (Strata Studio)
 
-เอกสารนี้สรุปสิ่งที่ตรวจพบใน `nix.ipynb` (เซลล์โค้ดเดียว ~1,150 บรรทัด), สิ่งที่ **แก้แล้ว** ในรอบนี้
+เอกสารนี้สรุปสิ่งที่ตรวจพบใน `nix.ipynb` (เซลล์โค้ดเดียว ~1,400 บรรทัด), สิ่งที่ **แก้แล้ว**
 และสิ่งที่ยัง **เหลือ** ให้พิจารณา
 
 รันทดสอบซ้ำได้ด้วย:
 
 ```bash
-python3 tools/smoke_test.py
+python3 tools/smoke_test.py       # โครงสร้าง notebook + ฟังก์ชันหลัก (ไม่ต้องมี Colab)
+python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริงด้วย ipywidgets แล้วกดปุ่ม (ต้องมี ipywidgets + numpy)
 ```
 
 ---
@@ -30,31 +31,41 @@ python3 tools/smoke_test.py
 
 ---
 
-## 🔜 ยังเหลือ (แนะนำลำดับถัดไป)
+## ⚡ แก้แล้วรอบที่ 2 (P2 — ประสิทธิภาพ & ความถูกต้อง)
 
-### P2 — ประสิทธิภาพ & ความถูกต้อง
-- **`_refresh()` แพงเกินไป**: ทุกครั้งที่ส่งข้อความหรือกดปุ่ม จะ `rglob` + `stat` ไฟล์ GGUF ทั้ง 10 โมเดล,
-  เรียก `nvidia-smi` และยิง HTTP health check → ควร cache ขนาดโฟลเดอร์ (คำนวณใหม่เมื่อติดตั้ง/ลบ) และยิง health check แบบ debounce
-- **Streaming เรนเดอร์ O(n²)**: ทุก token เรียก `_fmt_reply_html(''.join(buf))` ใหม่ทั้งก้อน → อัปเดตทุก ~100ms หรือเมื่อเจอ paragraph break
-- **Arena**: `max_tokens=512` hardcode และใช้ `temp_sl` ของแท็บแชทข้ามแท็บ → แยก state ต่อแท็บ
-- **RAG**: chunk ตัดกลางคำ (ควร split ตามย่อหน้า/ประโยคก่อน), `np.vstack` ทุกครั้งที่เพิ่มเอกสาร (O(n²)) ควรใช้ list แล้วค่อย concat,
-  `search()` ไม่มี score threshold, `add_pdf_bytes` เรียก `extract_text()` ซ้ำ 2 รอบต่อหน้า, ไม่มี dedup/จำกัดขนาดไฟล์
-- **RAG ไม่ persist**: restart แล้ว embeddings หายหมด → dump `chunks` + embeddings ลง `npz`/json หรือ ChromaDB บน Drive
-- **`gb_per_layer=0.5`** หยาบเกินสำหรับโมเดล 27B (จริง ~0.24 GB/layer) → คำนวณจากขนาดไฟล์ / จำนวน layer แทนค่าคงที่
+| # | ปัญหาเดิม | ผลกระทบ | วิธีแก้ |
+|---|---|---|---|
+| 1 | `_refresh()` สร้าง widget แถวโมเดลใหม่ **ทั้ง 10 แถวทุกครั้ง** + `rglob` + `stat` ทุกไฟล์ + `nvidia-smi` + HTTP | UI กระตุกทุกครั้งที่ส่งแชท ปุ่มที่กำลังกดหลุดสถานะ | สร้างแถวครั้งเดียวแล้วอัปเดตแค่ `value`/`description`/`disabled`; ขนาดโฟลเดอร์ใช้ `_dir_stats()` cache 30 วิ (invalidate หลังติดตั้ง/ลบ); health check cache 1.5 วิ (`_probe_server` แยกไว้, `ttl=0` เมื่อต้องค่าใหม่) |
+| 2 | วาด HTML ใหม่ทุก token (`_fmt_reply_html(''.join(buf))`) | O(n²) — ตอบยาว ๆ แล้วกระตุกหนัก | throttle ~100ms หรือเมื่อขึ้นบรรทัดใหม่ + วาดรอบสุดท้ายครั้งเดียว (ทำทั้งแท็บแชทและ Arena) |
+| 3 | Arena hardcode `max_tokens=512` และยืม `Temp` จากแท็บแชท | เทียบโมเดลไม่ยุติธรรม ปรับแยกไม่ได้ | เพิ่ม `a_temp_sl` / `a_max_sl` ของ Arena เอง + clamp ตาม ctx จริง |
+| 4 | Chunking ตัดตามตัวอักษรดิบ ๆ (ตัดกลางคำ) | คุณภาพ RAG ต่ำ ค้นหาเพี้ยน | `split_chunks()` ตัดที่ขอบย่อหน้า/ประโยคก่อน, overlap เริ่มที่ขอบคำเสมอ, ประโยคยาวเกินค่อยตัดเป็นท่อน |
+| 5 | `np.vstack` ทุกครั้งที่เพิ่มเอกสาร (O(n²)) | นำเข้าไฟล์เยอะ ๆ ช้าลงเรื่อย ๆ | เก็บเป็น list ของ matrix แล้ว `np.concatenate` ครั้งเดียวแบบ lazy (`embeddings` property + setter คง API เดิม) |
+| 6 | `search()` คืน top-k เสมอ แม้ score ต่ำ/ติดลบ | prompt ปนข้อมูลที่ไม่เกี่ยว | เพิ่ม `min_score=0.05` (ปรับได้) และ `build_augmented_prompt(min_score=...)`, จัด rank ใหม่หลังกรอง |
+| 7 | `add_pdf_bytes()` เรียก `extract_text()` ซ้ำ 2 รอบ/หน้า | PDF ยาว ๆ ช้าเป็นเท่าตัว | extract ครั้งเดียว/หน้า + รายงานจำนวนหน้าที่ไม่มีข้อความ |
+| 8 | ไม่มี dedup / ไม่จำกัดขนาด | chunk ซ้ำ ถังบวมจน context ล้น | กันซ้ำด้วย SHA-1 ของ `source|text`, `max_chunks=4000`, ข้ามไฟล์เกิน 25 MB |
+| 9 | คลัง RAG หายทุกครั้งที่ restart | ต้อง ingest ใหม่ทุก session | `save()`/`load()` เป็น `.npz` (embeddings + chunks) + ปุ่ม 💾 บันทึกคลัง / 📂 โหลดคลังเดิม (ค่าเริ่มต้น `/content/rag_store.npz`) |
+| 10 | `--n-gpu-layers` เดาจาก `gb_per_layer=0.5` และสมมติ 48 layer | โมเดล 27B offload ผิดสัดส่วน ใช้ VRAM ไม่คุ้ม | อ่าน `<arch>.block_count` จากหัวไฟล์ GGUF จริง (`_gguf_layer_count`) แล้วคำนวณ layer ที่ใส่ GPU ได้ + log ให้เห็น |
 
-### P3 — โครงสร้าง & repo hygiene
-- **แยกเซลล์/โมดูล**: 1,150 บรรทัดในเซลล์เดียว debug ยาก → แยกเป็น `strata/core.py` (config, download, server), `strata/rag.py`, `strata/ui.py`
+### เทสต์ที่เพิ่มในรอบนี้
+- `tools/smoke_test.py` +4 เคส: cache ของ `_dir_stats`, `_gguf_layer_count` (GGUF สังเคราะห์), `StrataRAG.split_chunks` (ความยาว/ลำดับคำ/overlap), dedup + search + save/load
+- `tools/ui_smoke_test.py` (ใหม่): สร้างหน้าจอจริงด้วย ipywidgets แล้วตรวจ 4 แท็บ, ปุ่มครบตามจำนวนโมเดล, **กดรีเฟรชซ้ำแล้ว widget ต้องเป็นตัวเดิม**, ปุ่มโหลด/รัน/ลบเรียกฟังก์ชันถูก, และปุ่มบันทึก/โหลดคลัง RAG เขียน-อ่านไฟล์จริง
+- `test_performance_patterns`: กันไม่ให้ `_refresh` กลับไปสร้าง widget/`rglob` เอง และกันไม่ให้ถอด throttle/`min_score` ออก
+
+---
+
+## 🔜 ยังเหลือ (P3 — โครงสร้าง & repo hygiene)
+
+- **แยกเซลล์/โมดูล**: 1,400+ บรรทัดในเซลล์เดียว debug ยาก → แยกเป็น `strata/core.py` (config, download, server), `strata/rag.py`, `strata/ui.py`
   แล้ว notebook เหลือแค่ `!pip install -e .` + `from strata.ui import show_model_manager_ui`
-- **Notebook บวม**: ไฟล์ 611 KB แต่โค้ดจริง ~70 KB — ที่เหลือคือ output + widget state (329 KB) ที่ค้างจากรันครั้งก่อน
-  → `jupyter nbconvert --clear-output --inplace nix.ipynb` ก่อน commit (ตั้งใจเว้นไว้ในรอบนี้เพราะยังไม่ได้รัน UI ใหม่)
-- **Pin dependency**: `uv add` ไม่ระบุเวอร์ชัน, `nixpkgs` ชี้ `nixos-unstable` → ควรมี `pyproject.toml` ที่ pin และ pin nixpkgs rev
-- **`curl | sh` สำหรับ Nix**: ยังไม่ได้ตรวจ checksum (ควรดาวน์โหลดสคริปต์มาแล้ว verify ก่อนรัน)
+- **Notebook บวม**: ไฟล์ ~640 KB แต่โค้ดจริง ~90 KB — ที่เหลือคือ output + widget state ที่ค้างจากรันครั้งก่อน
+  → `jupyter nbconvert --clear-output --inplace nix.ipynb` ก่อน commit (ตั้งใจเว้นไว้ในรอบนี้เพราะยังไม่ได้รัน UI ใหม่บน Colab)
+- **Pin dependency**: `uv add` ไม่ระบุเวอร์ชัน, `nixpkgs` ชี้ `nixos-unstable` → ใส่ `pyproject.toml` ที่ pin และ pin nixpkgs rev
+- **`curl | sh` สำหรับ Nix**: ยังไม่ได้ตรวจ checksum (ควรดาวน์โหลดสคริปต์มา verify ก่อนรัน)
 - **ลบ `/usr/local/bin/bash` / `/usr/local/bin/sh`**: อันตรายกับ runtime ของ Colab — ควรใช้ `ln -sf` ทับแทนการลบ
 - **Dead code**: `asyncio`, `TypeVar T`, `list_model_files()`, `CUSTOM_INCLUDE` (เป็น `None` ตลอด)
 - **Global state**: `SPEC_STATE`, `LLAMA_SERVER_PROC`, `LAST_MODEL_DIR` ไม่มี lock → ดับเบิลคลิกปุ่มเร็ว ๆ แล้วสตาร์ทซ้อน
-- **README** ยังเป็น `# Colab` เฉย ๆ → ควรมีวิธีใช้, ข้อกำหนด GPU/ดิสก์, พอร์ต, และตัวอย่าง API
-
----
+- **RAG ยังไม่ทำ rerank** (เช่น cross-encoder) และยังไม่รองรับ PDF ที่เป็นภาพสแกน (ต้องใช้ OCR)
+- **README** ยังเป็น `# Colab` เฉย ๆ → ควรมีวิธีใช้, ข้อกำหนด GPU/ดิสก์, พอร์ต, ตัวอย่าง API
 
 ## หมายเหตุการทดสอบ
 - ทดสอบกับ Python 3.11.2 (sandbox) — คอมไพล์ผ่านและ smoke test ผ่านทั้งหมด
