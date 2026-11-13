@@ -110,6 +110,21 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
+## 🐞 P0 (เจอตอนรันบน Colab จริง): `.gitignore` กว้างเกิน ทำ template หายจาก clone
+
+`FileNotFoundError: strata/templates/flake.nix` ตอน `ensure_environment()` — ต้นตอคือ `.gitignore`
+เขียนว่า `flake.nix` (ไม่มี `/` นำหน้า) ซึ่ง match **ทุกไฟล์ชื่อ flake.nix ในทุกโฟลเดอร์**
+รวมถึง template ของแพ็กเกจ → ไฟล์ไม่เคยถูก commit แต่เครื่อง dev มีอยู่ เทสต์เดิมจึงผ่านหมด
+
+- เปลี่ยนเป็น pattern ที่ยึดรากรีโป: `/.venv/`, `/flake.nix`, `/flake.lock`, `/default.nix`, `/requirements.txt`
+- commit `strata/templates/flake.nix` (ไฟล์ที่หายไปตั้งแต่ตอนแยกแพ็กเกจ)
+- เทสต์ใหม่ 2 ตัว:
+  - `package files tracked by git`: ไฟล์ทุกตัวใต้ `strata/` ต้องอยู่ใน `git ls-files` และต้องไม่ถูก `check-ignore` บัง
+  - `flake.nix from template`: อ่าน template ได้จริง + แทน placeholder ครบ + ยังคง `"$@"` ของ `hf download`
+- บทเรียน: เทสต์บนเครื่อง dev ผ่านหมดไม่ได้แปลว่า clone มาจะรันได้ — ต้องมีเทสต์ที่ validated ว่าไฟล์ถูก track
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

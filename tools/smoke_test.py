@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -607,6 +608,52 @@ def test_notebook_repo_bootstrap() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_package_files_tracked() -> None:
+    """ไฟล์ทุกตัวในแพ็กเกจต้องถูก git ติดตาม — กันเคส .gitignore กว้างเกินจน clone มาแล้วไฟล์หาย"""
+    if not (ROOT / ".git").exists():
+        raise Skip("ไม่มี .git ในเครื่องนี้")
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", "strata"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split("\0")
+    tracked = {t for t in tracked if t}
+    on_disk = {
+        str(p.relative_to(ROOT))
+        for p in (ROOT / "strata").rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+    }
+    missing = sorted(on_disk - tracked)
+    assert not missing, f"ไฟล์ในแพ็กเกจที่ยังไม่ถูก commit (clone มาจะหาย): {missing}"
+
+    ignored = subprocess.run(
+        ["git", "-C", str(ROOT), "check-ignore", "-z", "--stdin"],
+        input="\0".join(sorted(on_disk)), capture_output=True, text=True,
+    )
+    for path in (p for p in ignored.stdout.split("\0") if p):
+        assert path.endswith(".pyc"), f"ไฟล์แพ็กเกจถูก .gitignore บัง: {path}"
+
+
+def test_write_flake_from_template() -> None:
+    """Template ต้องอ่านได้จริงและแทน placeholder ครบ (เคสจริง: strata/templates/flake.nix หายจาก clone)"""
+    from strata import bootstrap as bs
+
+    assert bs.FLAKE_TEMPLATE.is_file(), f"ไม่พบ template: {bs.FLAKE_TEMPLATE}"
+    tmp = Path(tempfile.mkdtemp())
+    old = Path.cwd()
+    try:
+        os.chdir(tmp)
+        out = bs.write_flake("org/repo")
+        text = Path(out).read_text(encoding="utf-8")
+    finally:
+        os.chdir(old)
+        shutil.rmtree(tmp, ignore_errors=True)
+    leftovers = [tok for tok in ("@NIXPKGS_REV@", "@PY_VER@", "@CUSTOM_HF_REPO@", "@MODEL_DIR@") if tok in text]
+    assert not leftovers, f"ยังมี placeholder ค้างใน flake.nix: {leftovers}"
+    assert "$@" in text or "\"$@\"" in text, "สคริปต์ hf download ต้องยังรับ argument ต่อท้ายได้"
+    assert bs.NIXPKGS_REV in text, "flake.nix ต้องปักหมุด nixpkgs rev"
+    assert "org/repo" in text, "flake.nix ต้องใส่ repo ของ GGUF ที่กำหนด"
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -627,6 +674,8 @@ def main() -> int:
     check("server lock guard", test_server_lock_guard)
     check("network monitor (DL/UL)", test_network_monitor)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
+    check("package files tracked by git", test_package_files_tracked)
+    check("flake.nix from template", test_write_flake_from_template)
     if FAILURES:
         print(f"\n❌ ล้มเหลว {len(FAILURES)} รายการ")
         return 1

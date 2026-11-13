@@ -175,6 +175,7 @@ ruff check strata tools           # lint
 
 | อาการ | สาเหตุ/วิธีแก้ |
 | --- | --- |
+| `FileNotFoundError: strata/templates/flake.nix` | เคยเกิดจาก `.gitignore` กว้างเกิน (แก้แล้ว) — ถ้าเจออีกให้ `git ls-files strata` เช็กว่าไฟล์ถูก track |
 | `RuntimeError: clone ... แล้วไม่พบแพ็กเกจ strata/` | ทุก branch ที่ลองไม่มีโค้ด — ใส่ชื่อ branch ในช่อง `REPO_BRANCH` ให้ตรง (เช่น branch ของ PR) หรือ merge PR เข้า branch หลัก |
 | `ModuleNotFoundError: No module named 'strata'` | เกิดเมื่อรันเซลล์ที่ 2 ก่อนเซลล์ที่ 1 หรือ clone ไม่สำเร็จ — รันเซลล์ 1 ใหม่ (จะมีข้อความ `📂 ใช้โค้ดจาก: ...`) และถ้าทดสอบ branch/PR ให้ใส่ชื่อ branch ในช่อง `REPO_BRANCH` |
 | `ติดตั้ง Nix` ค้าง/ช้า | Colab บางรอบเน็ตช้า ลองรันเซลล์ 1 ใหม่ (ขั้นตอนที่ทำแล้วจะถูกข้าม) |
