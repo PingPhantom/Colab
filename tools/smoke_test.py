@@ -494,7 +494,7 @@ def test_notebook_repo_bootstrap() -> None:
     for need in ("_ensure_repo", "_refresh", "_pr_branches", "_ok"):
         assert need in names, f"ไม่พบฟังก์ชัน {need} ในเซลล์ setup (โหลดเซลล์เก่าอยู่?)"
     assert "NOTEBOOK_REV" in src, "เซลล์ setup ต้องมี marker NOTEBOOK_REV ให้เดาเวอร์ชันได้"
-    keep = {"REQUIRED", "GIT_ENV", "NOTEBOOK_REV"}
+    keep = {"REQUIRED", "GIT_ENV", "NOTEBOOK_REV", "AUTO_UPDATE"}
     assigns = [
         n for n in tree.body
         if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in keep for t in n.targets)
@@ -570,6 +570,16 @@ def test_notebook_repo_bootstrap() -> None:
             ns["_refresh"] = refresh
         assert refreshed == [[None, "no/strata", "pr/head"]], f"ลำดับ ref สำหรับ refresh ผิด: {refreshed}"
         assert not clones, f"มี clone เดิมแล้วไม่ควร clone ซ้ำ: {clones}"
+
+        # 2b) ปิด AUTO_UPDATE -> ใช้ของเดิมถ้าครบ โดยไม่ fetch
+        refreshed.clear()
+        os.chdir(stale)
+        try:
+            materialize(stale / "Colab")
+            assert ensure_repo("org/repo", "", update=False).resolve() == (stale / "Colab").resolve()
+        finally:
+            os.chdir(old_cwd)
+        assert not refreshed, f"ปิด AUTO_UPDATE แล้วไม่ควร refresh: {refreshed}"
 
         # 3) ไม่มี clone เลย -> ไล่ branch หลักก่อน แล้วถอยไป PR
         bare = tmp / "bare"
