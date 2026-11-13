@@ -1,3 +1,13 @@
+# Python
 __pycache__/
 *.pyc
+
+# สร้างโดย strata/bootstrap.py ใน Colab
+.venv/
+flake.nix
+flake.lock
+default.nix
+requirements.txt
+
+# Jupyter
 .ipynb_checkpoints/

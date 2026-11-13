@@ -1,1 +1,148 @@
-# Colab
+# 🎛️ Strata Studio
+
+<a href="https://colab.research.google.com/github/PingPhantom/Colab/blob/main/nix.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
+
+จัดการโมเดล **GGUF** บน [llama.cpp](https://github.com/ggml-org/llama.cpp) พร้อม **StrataRAG** (คลังความรู้จาก PDF/ข้อความ)
+และ UI 4 แท็บสำหรับ Google Colab — ใช้ GPU T4 ฟรีก็รันได้
+
+> โค้ดทั้งหมดอยู่ในแพ็กเกจ [`strata/`](./strata) ส่วน `nix.ipynb` เหลือแค่เซลล์ติดตั้ง + เปิด UI
+
+---
+
+## ✨ ความสามารถ
+
+- **10 โมเดล preset + custom repo** — ดาวน์โหลด/ลบ/เก็บตัวเดียว, เช็กดิสก์และ VRAM ก่อนโหลด
+- **Speculative decoding** — MTP, external draft model, N-gram พร้อม fallback อัตโนมัติเมื่อโหมดใดโหลดไม่ได้
+- **เลือก quant อัตโนมัติ** — อ่านจำนวน layer จริงจากหัวไฟล์ GGUF แล้วคำนวณ `--n-gpu-layers` ให้พอดี VRAM
+- **StrataRAG** — chunk ตามประโยค, กันข้อมูลซ้ำ, ค้นหาแบบ cosine + `min_score`, บันทึก/โหลดคลังเป็น `.npz`
+- **UI 4 แท็บ** — โมเดล&ดิสก์ • แชท+RAG • คลัง PDF • เปรียบเทียบหลายโมเดล (Arena)
+- **API แบบ OpenAI-compatible** ที่ `http://127.0.0.1:18080/v1`
+- **ไม่แตะไฟล์ระบบของ Colab** — ใช้ symlink แทนการลบ, ตรวจสคริปต์ติดตั้ง Nix ก่อนรัน, แตก archive อย่างปลอดภัย
+
+---
+
+## 🚀 เริ่มใช้ (Colab)
+
+1. เปิด [`nix.ipynb`](./nix.ipynb) ใน Colab (เลือก Runtime → GPU)
+2. รันเซลล์ **1) ติดตั้งสภาพแวดล้อม** — ติดตั้ง Nix (ปักหมุด nixpkgs), devshell, และ `.venv` ตาม `pyproject.toml`
+3. รันเซลล์ **2) เปิด Studio UI** — เปิด UI ที่พอร์ต `18080` (ไม่ชนกับพอร์ต 8080 ของ Colab)
+4. แท็บแรก → กด **📥 โหลด** โมเดลที่ต้องการ → **🚀 รัน & แชท** → ไปคุยที่แท็บ 2
+
+ใช้ในเครื่องตัวเอง (Linux + Nix):
+
+```bash
+nix develop                 # ได้ python + uv + hf + ruff + download-deepseek
+uv sync                     # ติดตั้ง dependency ตาม pyproject.toml
+jupyter lab                 # แล้วเปิด nix.ipynb
+```
+
+---
+
+## 🧩 โครงสร้างโค้ด
+
+```
+strata/
+├── config.py       # ค่าคงที่: พอร์ต, path, MODEL_CATALOG, DRAFT_CATALOG, SPEC_STATE (ไม่พึ่ง lib ภายนอก)
+├── bootstrap.py    # เตรียม Nix + flake (ปักหมุด rev) + uv venv ให้ kernel ใช้ได้ทันที
+├── utils.py        # รัน shell อย่างปลอดภัย, cache ขนาดโฟลเดอร์, แตก tar/zip อย่างปลอดภัย
+├── download.py     # ดาวน์โหลด/ติดตั้ง/ลบโมเดล + draft model
+├── server.py       # ติดตั้ง llama.cpp, เลือก quant/layer, สตาร์ท/หยุด server, OpenAI client
+├── rag.py          # StrataRAG: chunking, embedding, search, persist
+├── ui.py           # ipywidgets UI 4 แท็บ
+├── notebook.py     # ตัวช่วยใน notebook: register_magics(), launch()
+└── templates/
+    └── flake.nix   # devshell template (แทนที่ rev/py version ตอน bootstrap)
+tools/
+├── smoke_test.py      # เทสต์โครงสร้าง + ฟังก์ชันหลัก (ไม่ต้องมี GPU/Colab)
+└── ui_smoke_test.py   # สร้าง UI จริงด้วย ipywidgets แล้วกดปุ่ม
+```
+
+### ตัวอย่างเรียกใช้ตรง ๆ
+
+```python
+from strata.download import install_model, remove_model
+from strata.server import start_strata_server, stop_strata_server, get_openai_client
+
+install_model("qwen35-9b-defiant-fable", auto_start_server=True)
+client = get_openai_client()                    # OpenAI-compatible ที่ :18080
+print(client.chat.completions.create(
+    model="qwen35-9b-defiant-fable",
+    messages=[{"role": "user", "content": "สวัสดี"}],
+).choices[0].message.content)
+
+stop_strata_server()
+```
+
+```python
+from strata.rag import GLOBAL_RAG
+
+GLOBAL_RAG.add_files("/content/document.pdf", chunk_size=500)
+GLOBAL_RAG.save("/content/rag_store.npz")
+prompt, docs = GLOBAL_RAG.build_augmented_prompt("สรุปสาระสำคัญให้หน่อย", top_k=3)
+```
+
+---
+
+## ⚙️ ตั้งค่าผ่าน environment variable
+
+| ตัวแปร | ค่าเริ่มต้น | ใช้ทำอะไร |
+| --- | --- | --- |
+| `STRATA_PORT` | `18080` | พอร์ต API server / UI |
+| `STRATA_HOME` | `/content` | โฟลเดอร์เก็บ log และคลัง RAG |
+| `STRATA_MODEL_DIR` | `$STRATA_HOME/models` | ที่เก็บโมเดล GGUF |
+| `STRATA_DRAFT_DIR` | `$STRATA_MODEL_DIR/_drafts` | ที่เก็บ draft model |
+| `STRATA_RAG_STORE` | `$STRATA_HOME/rag_store.npz` | ไฟล์คลัง RAG |
+| `STRATA_LOG_FILE` | `$STRATA_HOME/llama_server.log` | log ของ llama-server |
+| `LLAMA_CPP_TAG` | release ล่าสุด | ปักหมุดเวอร์ชัน llama.cpp (เช่น `b7000`) |
+| `NIX_INSTALL_SHA256` | – | บังคับ checksum ของสคริปต์ติดตั้ง Nix |
+| `HF_REPO_ID` | repo ตาม catalog | override repo ตอนเรียก `download-deepseek` |
+
+---
+
+## 💻 ข้อกำหนดเครื่อง
+
+| รายการ | ขั้นต่ำ | แนะนำ |
+| --- | --- | --- |
+| GPU | T4 16 GB (Colab ฟรี) | L4 / A100 |
+| RAM | 12 GB | 25 GB+ |
+| ดิสก์ | 20 GB (โมเดล 9B ~6.4 GB) | 100 GB+ ถ้าโหลดหลายตัว |
+| Python | 3.10+ (Colab 3.11/3.12) | 3.12 |
+
+โมเดล 27B–35B (IQ4_XS ~15 GB) ต้องใช้ `--n-gpu-layers` บางส่วนหรือ KV cache แบบ Q8 ซึ่งโค้ดเลือกให้อัตโนมัติ
+
+---
+
+## 🧪 เทสต์
+
+```bash
+pip install numpy ipywidgets requests rich   # dependency ที่เทสต์ต้องใช้
+python3 tools/smoke_test.py       # โครงสร้าง + ฟังก์ชันหลัก (chunking, quant picker, GGUF parser, ...)
+python3 tools/ui_smoke_test.py    # สร้าง widget tree จริงแล้วกดปุ่ม (รีเฟรช/โหลด/RAG save-load)
+ruff check strata tools           # lint
+```
+
+เทสต์ไม่ต้องใช้ GPU และไม่รัน side effect (ไม่ติดตั้ง Nix / ไม่ดาวน์โหลดโมเดล)
+
+---
+
+## 🛠️ แก้ปัญหาที่พบบ่อย
+
+| อาการ | สาเหตุ/วิธีแก้ |
+| --- | --- |
+| `ติดตั้ง Nix` ค้าง/ช้า | Colab บางรอบเน็ตช้า ลองรันเซลล์ 1 ใหม่ (ขั้นตอนที่ทำแล้วจะถูกข้าม) |
+| `nix develop` ฟ้อง hash mismatch | ลบ `flake.lock` แล้วรันใหม่ หรือ `nix flake update` |
+| `Server พอร์ต 18080 ยังไม่เปิด` | กด 🚀 รัน & แชท ที่แท็บ 1 (ต้องมีไฟล์โมเดลก่อน) |
+| โหลดโมเดลแล้วช้า/ค้าง | ดู log ที่ `/content/llama_server.log` หรือปุ่ม 📡 สถานะ |
+| RAG ตอบไม่ตรง | เพิ่ม `chunk_size`/`top_k` หรือลด `min_score` ใน `GLOBAL_RAG.search()` |
+| ดิสก์เต็ม | แท็บ 1 → 🧹 ล้างแคช / 🗑️ ลบโมเดลที่ไม่ใช้ |
+
+---
+
+## 📄 เอกสารเพิ่มเติม
+
+- [`REVIEW.md`](./REVIEW.md) — บันทึกการรีวิว/แก้ไข (P0–P2) และสิ่งที่ยังเหลือ
+- [`nix.ipynb`](./nix.ipynb) — notebook สำหรับ Colab
+
+## License
+
+MIT

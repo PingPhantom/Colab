@@ -1,7 +1,7 @@
-# รีวิว & แผนปรับปรุง `nix.ipynb` (Strata Studio)
+# รีวิว & แผนปรับปรุง (Strata Studio)
 
-เอกสารนี้สรุปสิ่งที่ตรวจพบใน `nix.ipynb` (เซลล์โค้ดเดียว ~1,400 บรรทัด), สิ่งที่ **แก้แล้ว**
-และสิ่งที่ยัง **เหลือ** ให้พิจารณา
+เอกสารนี้สรุปสิ่งที่ตรวจพบในโปรเจกต์ — เดิมเป็นโค้ดก้อนเดียวใน `nix.ipynb` (~1,400 บรรทัด)
+ปัจจุบันอยู่ในแพ็กเกจ [`strata/`](./strata) — พร้อมสิ่งที่แก้ไปแล้วและสิ่งที่เหลือ
 
 รันทดสอบซ้ำได้ด้วย:
 
@@ -53,20 +53,38 @@ python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริ�
 
 ---
 
-## 🔜 ยังเหลือ (P3 — โครงสร้าง & repo hygiene)
+## 🏗️ แก้แล้วรอบที่ 3 (P3 — โครงสร้าง, dependency, เอกสาร)
 
-- **แยกเซลล์/โมดูล**: 1,400+ บรรทัดในเซลล์เดียว debug ยาก → แยกเป็น `strata/core.py` (config, download, server), `strata/rag.py`, `strata/ui.py`
-  แล้ว notebook เหลือแค่ `!pip install -e .` + `from strata.ui import show_model_manager_ui`
-- **Notebook บวม**: ไฟล์ ~640 KB แต่โค้ดจริง ~90 KB — ที่เหลือคือ output + widget state ที่ค้างจากรันครั้งก่อน
-  → `jupyter nbconvert --clear-output --inplace nix.ipynb` ก่อน commit (ตั้งใจเว้นไว้ในรอบนี้เพราะยังไม่ได้รัน UI ใหม่บน Colab)
-- **Pin dependency**: `uv add` ไม่ระบุเวอร์ชัน, `nixpkgs` ชี้ `nixos-unstable` → ใส่ `pyproject.toml` ที่ pin และ pin nixpkgs rev
-- **`curl | sh` สำหรับ Nix**: ยังไม่ได้ตรวจ checksum (ควรดาวน์โหลดสคริปต์มา verify ก่อนรัน)
-- **ลบ `/usr/local/bin/bash` / `/usr/local/bin/sh`**: อันตรายกับ runtime ของ Colab — ควรใช้ `ln -sf` ทับแทนการลบ
-- **Dead code**: `asyncio`, `TypeVar T`, `list_model_files()`, `CUSTOM_INCLUDE` (เป็น `None` ตลอด)
-- **Global state**: `SPEC_STATE`, `LLAMA_SERVER_PROC`, `LAST_MODEL_DIR` ไม่มี lock → ดับเบิลคลิกปุ่มเร็ว ๆ แล้วสตาร์ทซ้อน
-- **RAG ยังไม่ทำ rerank** (เช่น cross-encoder) และยังไม่รองรับ PDF ที่เป็นภาพสแกน (ต้องใช้ OCR)
-- **README** ยังเป็น `# Colab` เฉย ๆ → ควรมีวิธีใช้, ข้อกำหนด GPU/ดิสก์, พอร์ต, ตัวอย่าง API
+| # | ปัญหาเดิม | วิธีแก้ |
+|---|---|---|
+| 1 | โค้ด ~1,400 บรรทัดในเซลล์เดียว แก้/ทดสอบ/debug ยาก | แยกเป็นแพ็กเกจ `strata/`: `config` • `utils` • `bootstrap` • `download` • `server` • `rag` • `ui` • `notebook` (+ `templates/flake.nix`) โดยคงพฤติกรรมเดิมไว้ (แยกด้วย AST จากโค้ดที่เทสต์ผ่านแล้ว) |
+| 2 | `nix.ipynb` หนัก 611 KB (โค้ดจริง ~70 KB ที่เหลือเป็น output + widget state) | notebook เหลือ **4 เซลล์ ~5.5 KB** (intro → setup → launch → คู่มือ) ล้าง output/widget state ทั้งหมด + เทสต์ดักไม่ให้กลับมา |
+| 3 | dependency ลอยตัว (`uv add` ไม่ระบุเวอร์ชัน, `nixpkgs` = nixos-unstable) | `pyproject.toml` ระบุช่วงเวอร์ชันครบ + `uv sync` แทน `uv add`; flake ปักหมุด `NIXPKGS_REV` (nixos-unstable @ 2026-11-11) |
+| 4 | ติดตั้ง Nix ด้วย `curl ... \| sh` | ดาวน์โหลดสคริปต์ → ตรวจเนื้อหา + log `sha256` → รองรับ `NIX_INSTALL_SHA256` บังคับ checksum → ค่อยรันจากไฟล์ |
+| 5 | ลบ `/usr/local/bin/bash`, `/usr/local/bin/sh` ทิ้ง | เปลี่ยนเป็น `symlink` ไป `/bin/bash`, `/bin/sh` (ไม่ทำลาย runtime ของ Colab) |
+| 6 | Dead code (`asyncio`, `TypeVar`, `list_model_files`, `CUSTOM_INCLUDE`, alias `launch_strata`) | ลบออกทั้งหมด + เทสต์ `no dead code` กันกลับมา |
+| 7 | Global state กระจัดกระจาย (`LAST_MODEL_DIR`, `LLAMA_SERVER_PROC`) เสี่ยงกดซ้ำ/สตาร์ทซ้อน | `LLAMA_SERVER_PROC` อยู่ใน `server` เท่านั้น, `last_model_dir` ย้ายเข้า `SPEC_STATE`, เพิ่ม `_SERVER_LOCK` / `_INSTALL_LOCK` (non-blocking → แจ้งเตือนแทนการสตาร์ทซ้อน) |
+| 8 | `import` ทั้งเซลล์ดึง `fastembed`/`pypdf`/`openai` ทันที (ช้าและพังถ้าไม่ติดตั้ง) | import แบบ lazy ในฟังก์ชัน/`TYPE_CHECKING` → `import strata.server` เร็วและไม่ต้องมี heavy deps |
+| 9 | README เป็นแค่ `# Colab` | เขียนใหม่: ฟีเจอร์, quickstart, โครงสร้างโค้ด, ตัวอย่าง API/RAG, ตาราง env var, ข้อกำหนดเครื่อง, การทดสอบ, troubleshooting |
+| 10 | path/พอร์ต hardcode ใน `/content` | override ได้ผ่าน `STRATA_PORT`, `STRATA_HOME`, `STRATA_MODEL_DIR`, `STRATA_DRAFT_DIR`, `STRATA_RAG_STORE`, `STRATA_LOG_FILE` |
+
+### เทสต์หลัง refactor
+- `tools/smoke_test.py` — 16 เคส: โครง notebook (ต้องไม่มี output/state), คอมไพล์ทุกไฟล์ในแพ็กเกจ, f-string safety, public API/catalog, lazy import, รูปแบบโค้ดที่เคยพัง, perf patterns, dead code, quant picker, safe extract, `uv_add`, dir cache, GGUF parser, RAG chunking/dedup/persist, **server lock guard**
+- `tools/ui_smoke_test.py` — import `strata.ui` จริงแล้วสร้าง widget tree, กดรีเฟรชซ้ำ/widget ต้องเป็น object เดิม, กดโหลด/รัน/ลบ, บันทึก-โหลดคลัง RAG
+- `ruff check strata tools` — ผ่านทั้งหมด (E702 ถูก ignore เพราะเป็นโค้ดที่ port มาจาก notebook)
+
+### สิ่งที่ยังไม่ได้ทำ (ตั้งใจ)
+- RAG ยังไม่มี rerank (cross-encoder) และยังไม่อ่าน PDF ที่เป็นภาพสแกน (ต้อง OCR)
+- ยังไม่ได้รัน `Restart & Run All` บน Colab GPU จริงในรอบนี้ (sandbox ไม่มี GPU) — แนะนำรันหนึ่งรอบหลัง merge
+- ยังไม่ได้รัน `ruff format` ทั้งโปรเจกต์ (จะเกิด diff ยักษ์ในโค้ดที่ port มา) — ทำแยกได้เมื่อต้องการ
+
+---
+
+## 📌 สรุปสถานะ
+
+P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
+ถูกแก้ครบแล้วใน 3 คอมมิต ส่วนที่เหลือเป็นงานต่อยอด (rerank/OCR, format ทั้งโปรเจกต์, รันจริงบน Colab GPU)
 
 ## หมายเหตุการทดสอบ
-- ทดสอบกับ Python 3.11.2 (sandbox) — คอมไพล์ผ่านและ smoke test ผ่านทั้งหมด
-- ยังไม่ได้รันบน Colab GPU จริงในรอบนี้ (ต้องมี T4 + ดาวน์โหลดโมเดล) — แนะนำรัน `Restart & Run All` หนึ่งรอบหลัง merge
+- ทดสอบกับ Python 3.11.2 (sandbox): `tools/smoke_test.py` 16/16 ผ่าน, `tools/ui_smoke_test.py` 5/5 ผ่าน, `ruff check` สะอาด
+- ยังไม่ได้รันบน Colab GPU จริง (sandbox ไม่มี GPU) — แนะนำ `Restart & Run All` หนึ่งรอบหลัง merge

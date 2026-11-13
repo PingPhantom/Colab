@@ -1,0 +1,85 @@
+"""ค่าคงที่และ catalog ของ Strata Studio — import ได้โดยไม่ต้องมีไลบรารีภายนอก."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Literal
+
+# ตัวอักษร $ ใช้ประกอบสคริปต์ shell ใน f-string (เลี่ยงไม่ให้ Python/shell แทนค่าเอง)
+S = chr(36)
+
+
+DEFAULT_PORT: int = int(os.environ.get("STRATA_PORT", "18080"))
+
+NVIDIA_BIN_DIRS = "/usr/local/nvidia/bin:/usr/local/cuda/bin"
+
+NVIDIA_LIB_DIRS = "/usr/lib64-nvidia:/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
+
+ModelOptionType = Literal[
+    "none", "all", "sakura-minimax-h3", "qwen38-27b-cyber",
+    "qwen38-27b-rvn-heretic", "qwen38-27b-coletti", "muse-glimmer-30b-heretic",
+    "minicpm-v47-35b", "lfm25-24b-a2b", "qwen35-9b-defiant-fable",
+    "ornith-15-9b", "nemotron-35-bolt-74b", "custom",
+]
+
+ALL_PRESET_KEYS: list[str] = [
+    "sakura-minimax-h3", "qwen38-27b-cyber", "qwen38-27b-rvn-heretic",
+    "qwen38-27b-coletti", "muse-glimmer-30b-heretic", "minicpm-v47-35b",
+    "lfm25-24b-a2b", "qwen35-9b-defiant-fable", "ornith-15-9b",
+    "nemotron-35-bolt-74b",
+]
+
+MODEL_OPTION: ModelOptionType = "none"
+
+STRATA_HOME: str = os.environ.get("STRATA_HOME", "/content")
+MODEL_DIR: str = os.environ.get("STRATA_MODEL_DIR", f"{STRATA_HOME}/models")
+
+DRAFT_DIR: str = os.environ.get("STRATA_DRAFT_DIR", f"{MODEL_DIR}/_drafts")
+
+CUSTOM_HF_REPO: str = "AtomicChat/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Uncensored-GGUF"
+
+SPEC_STATE: dict = {
+    "mode": "off", "draft_max": 0, "draft_model": "",
+    "kv_q8": False, "active_label": "⏹️ ปิด Speculative",
+}
+
+DRAFT_CATALOG: dict[str, dict] = {
+    "qwen38-coletti-mtp": {
+        "repo_id": "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF",
+        "include": ["*draft*Q8_0*", "*draft*Q4*"], "exclude": ["*mmproj*"],
+        "is_mtp": True, "desc": "🚀 Qwen3.8-27B MTP Draft (Coletti)",
+    },
+    "qwen35-0.8b": {
+        "repo_id": "bartowski/Qwen_Qwen3.5-0.8B-GGUF",
+        "include": ["*Q4_K_M*.gguf"], "exclude": ["*mmproj*"],
+        "is_mtp": False, "desc": "⚡ Qwen3.5-0.8B Q4_K_M (~0.5GB • Bartowski)",
+    },
+    "qwen3-0.6b": {
+        "repo_id": "unsloth/Qwen3-0.6B-GGUF",
+        "include": ["*Q4_K_M*.gguf"], "exclude": ["*mmproj*"],
+        "is_mtp": False, "desc": "⚡ Qwen3-0.6B Q4_K_M (~0.4GB • Unsloth)",
+    },
+    "qwen3-coder-0.8b": {
+        "repo_id": "DavidAU/Qwen3-Zero-Coder-Reasoning-V2-0.8B-NEO-EX-GGUF",
+        "include": ["*Q4_K_M*.gguf", "*IQ4_XS*.gguf"], "exclude": ["*mmproj*"],
+        "is_mtp": False, "desc": "💻 Qwen3-Zero-Coder-0.8B (DavidAU)",
+    },
+}
+
+MODEL_CATALOG: dict[str, dict] = {
+    "sakura-minimax-h3": {"repo_id": "webmp3/Sakura-MiniMax-H3-Uncensored-GGUF", "include": ["*Q4_K*", "*IQ4*"], "exclude": None, "approx_gb": 15.5, "has_mtp": False, "desc": "🌸 Sakura-MiniMax-H3-Uncensored (26B) Multimodal"},
+    "qwen38-27b-cyber": {"repo_id": "cyjin-yl/Qwen3.8-27B-Uncensored-Cyber-agentic-imatrix-GGUF", "include": ["*IQ4_XS*", "*mmproj*"], "exclude": None, "approx_gb": 15.2, "has_mtp": False, "desc": "💻 Qwen3.8-27B-Uncensored-Cyber Coding & Agent"},
+    "qwen38-27b-rvn-heretic": {"repo_id": "0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF", "include": ["RVN-Q4_K_M.gguf", "*mmproj*"], "exclude": ["*mtp*", "*multilingual*"], "approx_gb": 16.5, "has_mtp": False, "desc": "🔥 Qwen3.8-27B-RVN-Heretic (RVN Q4_K_M) ARA 3-pass"},
+    "qwen38-27b-coletti": {"repo_id": "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF", "include": ["*IQ4_XS*", "*mmproj*"], "exclude": ["*noMTP*", "*draft*"], "approx_gb": 15.3, "has_mtp": True, "desc": "🧠 Qwen3.8-27B-Uncensored Coletti (IQ4_XS + MTP)"},
+    "muse-glimmer-30b-heretic": {"repo_id": "0bserverx/Muse-Glimmer-30B-Heretic-Uncensored-GGUF", "include": ["*IQ4_XS*", "*mmproj*"], "exclude": None, "approx_gb": 15.3, "has_mtp": False, "desc": "✨ Muse-Glimmer-30B-Heretic (IQ4_XS) Multimodal"},
+    "minicpm-v47-35b": {"repo_id": "AtomicChat/MiniCPM-V-4.7-35B-A3B-Uncensored-GGUF", "include": ["*IQ4_XS*", "*Q4_K_M*", "*mmproj*"], "exclude": None, "approx_gb": 20.5, "has_mtp": False, "desc": "👁️ MiniCPM-V-4.7-35B-A3B (3B active MoE) Vision"},
+    "lfm25-24b-a2b": {"repo_id": "AtomicChat/LFM2.5-24B-A2B-Uncensored-GGUF", "include": ["*Q4_K_M*", "*IQ4_XS*"], "exclude": None, "approx_gb": 14.5, "has_mtp": False, "desc": "⚡ LFM2.5-24B-A2B (2B active MoE) เร็วสูง หลายภาษา"},
+    "qwen35-9b-defiant-fable": {"repo_id": "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF", "include": ["*Q4_K_M*", "*mmproj-F16*"], "exclude": ["*draft*"], "approx_gb": 6.4, "has_mtp": True, "desc": "📖 Qwen3.5-9B-Defiant-Fable (Q4_K_M + MTP) T4 ลื่น"},
+    "ornith-15-9b": {"repo_id": "mradermacher/Ornith-1.5-9B-uncensored-GGUF", "include": ["*Q4_K_M*", "*mmproj-Q8_0*"], "exclude": None, "approx_gb": 6.4, "has_mtp": False, "desc": "🦅 Ornith-1.5-9B-uncensored (Q4_K_M) ลง T4 ได้ทั้งตัว"},
+    "nemotron-35-bolt-74b": {"repo_id": "AtomicChat/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Uncensored-GGUF", "include": ["*IQ2*", "*IQ3_XXS*", "*mmproj*"], "exclude": None, "approx_gb": 24.5, "has_mtp": False, "desc": "🚀 Nemotron-3.5-Bolt-74B-A9B (9B active MoE)"},
+    "custom": {"repo_id": CUSTOM_HF_REPO, "include": None, "exclude": None, "approx_gb": 0.0, "has_mtp": False, "desc": "⚙️ กำหนด Repo เอง"},
+}
+
+LLAMA_LOG_FILE = Path(os.environ.get("STRATA_LOG_FILE", f"{STRATA_HOME}/llama_server.log"))
+
+DEFAULT_RAG_PATH = os.environ.get("STRATA_RAG_STORE", f"{STRATA_HOME}/rag_store.npz")

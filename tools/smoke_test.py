@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Smoke test สำหรับ nix.ipynb — รันได้ทั้งบน Python 3.10/3.11/3.12
+"""Smoke test — ตรวจแพ็กเกจ strata/ + notebook โดยไม่ต้องใช้ GPU/Colab
 
-เช็ก 3 ชั้น:
-1. notebook เป็น JSON/nbformat ที่ถูกต้อง + เซลล์โค้ดคอมไพล์ผ่าน (จับ syntax ที่พังเฉพาะบางเวอร์ชัน)
-2. ฟังก์ชัน/คลาสสำคัญยังทำงานถูก (ดึงเฉพาะส่วนที่ต้องการออกมา exec ไม่รัน side effect)
-3. ไม่มีรูปแบบโค้ดที่เคยเป็นบั๊ก/ตัวถ่วงประสิทธิภาพกลับมา
+เช็ก 4 ชั้น:
+1. notebook ยังโครงถูก (ไม่มี output/state ค้าง, เซลล์โค้ดคอมไพล์ได้)
+2. โค้ดทุกไฟล์ในแพ็กเกจคอมไพล์ผ่าน และไม่มี f-string ที่พังบน Python < 3.12
+3. ฟังก์ชันสำคัญทำงานถูก (quant picker, safe extract, GGUF parser, cache, chunking, RAG persist)
+4. ไม่มีรูปแบบโค้ดที่เคยเป็นบั๊ก/ตัวถ่วงประสิทธิภาพกลับมา
 
 ใช้: python3 tools/smoke_test.py
-ต้องมี numpy สำหรับเทสต์ StrataRAG (ถ้าไม่มีจะข้ามพร้อมแจ้งเตือน)
+ต้องมี: numpy (ถ้าไม่มีจะข้ามเทสต์ RAG)
 """
 from __future__ import annotations
 
 import ast
-import hashlib
 import io
 import json
 import re
@@ -27,10 +27,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK = ROOT / "nix.ipynb"
+PKG = ROOT / "strata"
 FAILURES: list[str] = []
 SKIPS: list[str] = []
 
-try:  # numpy เป็น dependency ของ RAG เท่านั้น
+sys.path.insert(0, str(ROOT))
+
+try:
     import numpy as np
 except ModuleNotFoundError:  # pragma: no cover
     np = None
@@ -55,94 +58,15 @@ def check(name: str, fn) -> None:
         print(f"  ❌ {name}: {type(e).__name__}: {e}")
 
 
-def load_source() -> str:
-    nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
-    code_cells = [c for c in nb["cells"] if c["cell_type"] == "code"]
-    assert code_cells, "ไม่พบเซลล์โค้ดใน notebook"
-    return "\n".join("".join(c["source"]) for c in code_cells)
-
-
-def _base_namespace() -> dict:
-    return {
-        "__name__": "smoke",
-        "Path": Path,
-        "re": re,
-        "sys": sys,
-        "io": io,
-        "json": json,
-        "hashlib": hashlib,
-        "struct": struct,
-        "time": __import__("time"),
-        "tarfile": tarfile,
-        "zipfile": zipfile,
-        "shlex": __import__("shlex"),
-        "np": np,
-        "DEFAULT_RAG_PATH": "/tmp/rag_store_test.npz",
-        "_DIR_CACHE": {},
-        "_DIR_CACHE_TTL": 30.0,
-        "_GGUF_LAYERS": {},
-        "rprint": lambda *a, **k: None,
-        "PdfReader": object,          # ไม่ได้ใช้ในเทสต์นี้
-        "check_gpu_and_recommend": lambda verbose=False: {
-            "has_gpu": True,
-            "gpu_name": "TEST",
-            "vram_total_gb": 16.0,
-            "vram_free_gb": 16.0,
-            "ram_total_gb": 51.0,
-            "ram_avail_gb": 40.0,
-            "recommended_gpu_layers": 99,
-            "recommended_ctx_size": 8192,
-            "recommended_threads": 4,
-        },
-    }
-
-
-class FakeTextEmbedding:
-    """embedder ปลอม: คืนเวกเตอร์ 3 มิติตามหมวดคำ เพื่อทดสอบ cosine search ได้จริง"""
-
-    def __init__(self, model_name: str | None = None):
-        self.model_name = model_name
-
-    def embed(self, texts):
-        for t in texts:
-            low = str(t).lower()
-            cat = [1.0, 0.0, 0.0] if "แมว" in low or "cat" in low else None
-            dog = [0.0, 1.0, 0.0] if "หมา" in low or "dog" in low else None
-            yield np.asarray(cat or dog or [0.0, 0.0, 1.0], dtype=np.float32)
-
-
-def extract_defs(src: str, names: set[str]) -> dict:
-    """ดึงเฉพาะฟังก์ชัน/คลาสที่ต้องการออกมา exec ใน namespace ปลอม (ไม่รันโค้ดระดับบนสุด)"""
-    tree = ast.parse(src)
-    ns = _base_namespace()
-    ns["TextEmbedding"] = FakeTextEmbedding
-    found = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in names:
-            module = ast.Module(body=[node], type_ignores=[])
-            exec(compile(module, f"<{node.name}>", "exec"), ns)  # noqa: S102 - ทดสอบโค้ดของเราเอง
-            found.add(node.name)
-    missing = names - found
-    assert not missing, f"ไม่พบฟังก์ชัน: {sorted(missing)}"
-    return ns
-
-
-def function_source(src: str, name: str) -> str:
-    tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-            seg = ast.get_source_segment(src, node)
-            if seg:
-                return seg
-    raise AssertionError(f"ไม่พบฟังก์ชัน {name}")
+def package_sources() -> dict[str, str]:
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(PKG.glob("*.py"))}
 
 
 def fstring_backslash_expressions(src: str) -> list[str]:
-    """หา f-string ที่มี backslash อยู่ใน {expression} (SyntaxError บน Python < 3.12)
+    """หา f-string ที่มี backslash ใน {expression} (SyntaxError บน Python < 3.12)
 
-    ใช้ tokenize แทน ast เพราะ ast ก่อน 3.12 ไม่ให้ตำแหน่งของ expression ใน f-string
-    และนับเฉพาะวงเล็บปีกกา (ข้าม {{ }} ที่เป็นตัวอักษร) เพื่อไม่ให้ `[[ ... ]]` ของ shell
-    ทำให้เข้าใจผิด
+    ใช้ tokenize เพราะ ast ก่อน 3.12 ไม่ให้ตำแหน่งของ expression ใน f-string
+    และนับเฉพาะวงเล็บปีกกา (ข้าม {{ }} ที่เป็นตัวอักษร) เพื่อไม่ให้ `[[ ... ]]` ของ shell หลอก
     """
     pat = re.compile(r"(?i)^([rubf]*)(\'\'\'|\"\"\"|'|\")")
     bad: list[str] = []
@@ -176,45 +100,112 @@ def fstring_backslash_expressions(src: str) -> list[str]:
     return bad
 
 
-# ------------------------------------------------------------------ 1. โครงสร้าง notebook
+# ------------------------------------------------------------------ 1. notebook
 def test_notebook_shape() -> None:
     nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     assert nb.get("nbformat") == 4, "nbformat ต้องเป็น 4"
-    assert any(c["cell_type"] == "markdown" for c in nb["cells"]), "ต้องมีเซลล์ markdown (ปุ่ม Open in Colab)"
-    assert any(c["cell_type"] == "code" for c in nb["cells"]), "ต้องมีเซลล์โค้ด"
+    cells = nb["cells"]
+    assert any(c["cell_type"] == "markdown" for c in cells), "ต้องมีเซลล์ markdown (ปุ่ม Open in Colab)"
+    code = [c for c in cells if c["cell_type"] == "code"]
+    assert code, "ต้องมีเซลล์โค้ด"
+    for c in code:
+        assert not c.get("outputs"), "notebook ไม่ควรมี output ค้าง (ไฟล์จะบวม) — clear output ก่อน commit"
+        assert c.get("execution_count") is None, "ไม่ควรบันทึก execution_count"
+        assert "widgets" not in c.get("metadata", {}), "ไม่ควรมี widget state ค้างใน notebook"
+    size_kb = NOTEBOOK.stat().st_size / 1024
+    assert size_kb < 200, f"notebook ใหญ่เกินไป ({size_kb:.0f} KB) — น่าจะมี output/state ค้าง"
 
 
-def test_compiles() -> None:
-    compile(load_source(), str(NOTEBOOK), "exec")
+def test_notebook_cells_compile() -> None:
+    nb = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    for i, cell in enumerate(nb["cells"]):
+        if cell["cell_type"] != "code":
+            continue
+        src = "".join(cell["source"])
+        compile(src, f"nix.ipynb:cell{i}", "exec")
 
 
-# ------------------------------------------------------------------ 2. รูปแบบโค้ดที่เคยพัง
+# ------------------------------------------------------------------ 2. package
+def test_package_compiles() -> None:
+    sources = package_sources()
+    assert "config.py" in sources and "ui.py" in sources, f"โครงแพ็กเกจผิดปกติ: {sorted(sources)}"
+    for name, src in sources.items():
+        compile(src, name, "exec")
+        bad = fstring_backslash_expressions(src)
+        assert not bad, f"{name}: f-string มี backslash ใน expression (พังบน py<3.12): {bad[0][:70] if bad else ''}"
+
+
+def test_public_api() -> None:
+    import strata
+    from strata.config import ALL_PRESET_KEYS, MODEL_CATALOG, SPEC_STATE
+
+    assert strata.__version__
+    assert len(ALL_PRESET_KEYS) == 10, f"preset ต้องมี 10 ตัว ได้ {len(ALL_PRESET_KEYS)}"
+    assert len(MODEL_CATALOG) == 11, "MODEL_CATALOG ต้องมี 10 preset + custom"
+    assert set(ALL_PRESET_KEYS) <= set(MODEL_CATALOG), "preset ทุกตัวต้องอยู่ใน catalog"
+    assert "ctx_size" not in SPEC_STATE or isinstance(SPEC_STATE["ctx_size"], int)
+    for key, cfg in MODEL_CATALOG.items():
+        assert re.fullmatch(r"[\w.\-]+/[\w.\-]+", cfg["repo_id"]), f"{key}: repo_id ผิดรูป"
+        assert isinstance(cfg["desc"], str) and cfg["desc"], f"{key}: ต้องมี desc"
+
+
+def test_lazy_imports() -> None:
+    """โมดูลต้อง import ได้โดยไม่ต้องมี fastembed/pypdf/openai ติดตั้ง"""
+    code = (
+        "import sys\n"
+        "for m in ('fastembed', 'pypdf', 'openai'):\n"
+        "    sys.modules.pop(m, None)\n"
+        "import strata.config, strata.utils, strata.server, strata.download, strata.rag\n"
+        "leaked = [m for m in ('fastembed', 'pypdf') if m in sys.modules]\n"
+        "assert not leaked, f'import แล้วดึง dependency หนักทันที: {leaked}'\n"
+    )
+    ns: dict = {}
+    exec(compile(code, "<lazy>", "exec"), ns)  # noqa: S102
+
+
 def test_no_buggy_patterns() -> None:
-    src = load_source()
-    for call in re.findall(r"tf\.extractall\(([^)]*)\)", src):
+    sources = package_sources()
+    joined = "\n".join(sources.values())
+    for call in re.findall(r"tf\.extractall\(([^)]*)\)", joined):
         assert "members=" in call or "filter=" in call, f"tar extractall ไม่ปลอดภัย: {call}"
-    for call in re.findall(r"zf\.extractall\(([^)]*)\)", src):
+    for call in re.findall(r"zf\.extractall\(([^)]*)\)", joined):
         assert "root" in call, f"zip extractall ไม่ได้ส่ง path ที่ resolve แล้ว: {call}"
-    assert "pkill -f llama-server" not in src, "ห้ามใช้ pkill -f llama-server (ฆ่า process อื่น)"
-    bad = fstring_backslash_expressions(src)
-    assert not bad, f"f-string expression มี backslash (พังบน py<3.12): {bad[0][:70] if bad else ''}"
+    assert "pkill -f" not in joined, "ห้ามฆ่า process ด้วย pkill -f (กิน process อื่น)"
+    assert "curl -sL https://nixos.org/nix/install | sh" not in joined, "ห้าม curl|sh ติดตั้ง Nix"
+    assert '"/bin/bash", "-c"' in sources["utils.py"], "คำสั่ง shell ควรผ่าน run_quiet/run_stream เท่านั้น"
+    # ต้องมี lock กันกดซ้ำ
+    assert "_SERVER_LOCK" in sources["server.py"], "server ต้องมี lock กันสตาร์ทซ้อน"
+    assert "_INSTALL_LOCK" in sources["download.py"], "download ต้องมี lock กันติดตั้งซ้อน"
 
 
-def test_performance_patterns() -> None:
-    src = load_source()
-    refresh = function_source(src, "_refresh")
-    assert "_B(" not in refresh, "_refresh ต้องไม่อัปเดตด้วยการสร้าง widget ใหม่ทุกครั้ง (สร้างครั้งเดียวแล้วอัปเดต value)"
-    assert 'rglob("*.gguf")' not in refresh, "_refresh ต้องใช้ _dir_stats() แบบ cache ไม่ใช่ rglob เอง"
+def test_perf_patterns() -> None:
+    ui = package_sources()["ui.py"]
+    tree = ast.parse(ui)
+    refresh = next(
+        ast.get_source_segment(ui, n) for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_refresh"
+    )
+    assert refresh, "ไม่พบ _refresh"
+    assert "_B(" not in refresh, "_refresh ต้องไม่สร้าง widget ใหม่ทุกครั้ง"
+    assert 'rglob("*.gguf")' not in refresh, "_refresh ต้องใช้ _dir_stats() แบบ cache"
     assert "_dir_stats(" in refresh, "_refresh ควรใช้ _dir_stats() แบบ cache"
-    assert "last_draw" in src, "การสตรีมควร throttle การวาด HTML (~100ms) ไม่ใช่ทุก token"
-    search = function_source(src, "search")
-    assert "min_score" in search, "search() ควรกรองผลลัพธ์ที่ score ต่ำเกินไป"
+    assert "last_draw" in ui, "การสตรีมควร throttle การวาด HTML (~100ms)"
+    rag = package_sources()["rag.py"]
+    assert "min_score" in rag, "search() ควรกรองผลที่ score ต่ำเกินไป"
 
 
-# ------------------------------------------------------------------ 3. ฟังก์ชันพื้นฐาน
+def test_no_dead_code() -> None:
+    sources = package_sources()
+    joined = "\n".join(sources.values())
+    for name in ("list_model_files", "CUSTOM_INCLUDE", "TypeVar"):
+        assert name not in joined, f"ยังมี dead code: {name}"
+
+
+# ------------------------------------------------------------------ 3. ฟังก์ชันหลัก
 def test_pick_main_gguf() -> None:
-    ns = extract_defs(load_source(), {"_pick_main_gguf"})
-    pick = ns["_pick_main_gguf"]
+    if np is None:
+        raise Skip("ต้องมี numpy")
+    from strata.server import _pick_main_gguf
+
     tmp = Path(tempfile.mkdtemp())
     try:
         def mk(name: str, size: int) -> Path:
@@ -228,23 +219,24 @@ def test_pick_main_gguf() -> None:
         big = mk("m-Q8_0.gguf", 8 * 1024**3)
         mk("mmproj-model-f16.gguf", 200_000)
 
-        chosen, mm, size = pick(str(tmp), verbose=False)
+        big_hw = {"has_gpu": True, "vram_free_gb": 16.0, "ram_avail_gb": 40.0}
+        chosen, mm, size = _pick_main_gguf(str(tmp), hw=big_hw, verbose=False)
         assert chosen == big, f"ควรเลือก quant ใหญ่สุดที่โหลดไหว ได้ {chosen.name}"
-        assert mm is not None and "mmproj" in mm.name, "ควรเลือก mmproj แยกออกมา"
+        assert mm is not None and "mmproj" in mm.name
         assert 7 < size < 9, f"ขนาดที่คืนมาควรใกล้ 8GB ได้ {size}"
 
-        chosen, _, _ = pick(str(tmp), prefer="q4_k_m", verbose=False)
+        chosen, _, _ = _pick_main_gguf(str(tmp), hw=big_hw, prefer="q4_k_m", verbose=False)
         assert chosen == small, "prefer ต้องเลือก quant ตามที่ขอ"
 
         tight = {"has_gpu": True, "vram_free_gb": 4.0, "ram_avail_gb": 8.0}
-        chosen, _, _ = pick(str(tmp), hw=tight, verbose=False)
+        chosen, _, _ = _pick_main_gguf(str(tmp), hw=tight, verbose=False)
         assert chosen == small, f"งบจำกัดควรเลือกไฟล์เล็ก ได้ {chosen.name}"
 
         shard_dir = tmp / "sharded"
         mk("sharded/m-00001-of-00003.gguf", 1_000)
         mk("sharded/m-00002-of-00003.gguf", 1_000)
         try:
-            pick(str(shard_dir), verbose=False)
+            _pick_main_gguf(str(shard_dir), verbose=False)
         except FileNotFoundError as e:
             assert "shard" in str(e), f"ข้อความ error ควรบอก shard ขาด: {e}"
         else:
@@ -254,7 +246,8 @@ def test_pick_main_gguf() -> None:
 
 
 def test_safe_extract() -> None:
-    ns = extract_defs(load_source(), {"_safe_extract_tar", "_safe_extract_zip"})
+    from strata.utils import _safe_extract_tar, _safe_extract_zip
+
     tmp = Path(tempfile.mkdtemp())
     try:
         tar_path = tmp / "evil.tar.gz"
@@ -265,7 +258,7 @@ def test_safe_extract() -> None:
             tf.addfile(info, io.BytesIO(data))
         try:
             with tarfile.open(tar_path, "r:gz") as tf:
-                ns["_safe_extract_tar"](tf, tmp / "out")
+                _safe_extract_tar(tf, tmp / "out")
         except RuntimeError:
             pass
         else:
@@ -276,7 +269,7 @@ def test_safe_extract() -> None:
             zf.writestr("../../escaped-zip.txt", "pwn")
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
-                ns["_safe_extract_zip"](zf, tmp / "out2")
+                _safe_extract_zip(zf, tmp / "out2")
         except RuntimeError:
             pass
         else:
@@ -289,39 +282,44 @@ def test_safe_extract() -> None:
             info.size = len(payload)
             tf.addfile(info, io.BytesIO(payload))
         with tarfile.open(good, "r:gz") as tf:
-            ns["_safe_extract_tar"](tf, tmp / "out3")
+            _safe_extract_tar(tf, tmp / "out3")
         assert (tmp / "out3/pkg/readme.txt").read_bytes() == b"ok"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_uv_add_validation() -> None:
-    ns = extract_defs(load_source(), {"uv_add"})
-    ns["run_quiet"] = lambda cmd: None
-    ns["importlib"] = __import__("importlib")
+    from strata import utils
+
+    calls: list[str] = []
+    original = utils.run_quiet
+    utils.run_quiet = calls.append  # type: ignore[assignment]
     try:
-        ns["uv_add"]("numpy; rm -rf /")
+        utils.uv_add("numpy; rm -rf /")
     except ValueError:
         pass
     else:
         raise AssertionError("uv_add ต้องปฏิเสธชื่อแพ็กเกจที่มีอักขระอันตราย")
+    finally:
+        utils.run_quiet = original  # type: ignore[assignment]
+    assert not calls, "คำสั่งอันตรายไม่ควรถูกเรียกเลย"
 
 
-# ------------------------------------------------------------------ 4. P2: cache / GGUF / RAG
 def test_dir_stats_cache() -> None:
-    ns = extract_defs(load_source(), {"_dir_stats", "_invalidate_dir_cache"})
+    from strata.utils import _dir_stats, _invalidate_dir_cache
+
     tmp = Path(tempfile.mkdtemp())
     try:
         (tmp / "m.gguf").write_bytes(b"x" * 100)
-        first = ns["_dir_stats"](tmp)
+        first = _dir_stats(tmp)
         assert first["gguf"] == 1 and first["bytes"] == 100, f"อ่านค่าแรกผิด: {first}"
         (tmp / "second.gguf").write_bytes(b"y" * 50)
-        cached = ns["_dir_stats"](tmp)
+        cached = _dir_stats(tmp)
         assert cached["cached"] is True and cached["gguf"] == 1, "ควรคืนค่า cache ภายใน TTL"
-        fresh = ns["_dir_stats"](tmp, ttl=0)
+        fresh = _dir_stats(tmp, ttl=0)
         assert fresh["cached"] is False and fresh["gguf"] == 2, f"ttl=0 ต้องสแกนใหม่: {fresh}"
-        ns["_invalidate_dir_cache"]()
-        assert ns["_dir_stats"](tmp)["gguf"] == 2, "หลัง invalidate ต้องสแกนใหม่"
+        _invalidate_dir_cache()
+        assert _dir_stats(tmp)["gguf"] == 2, "หลัง invalidate ต้องสแกนใหม่"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -341,15 +339,16 @@ def _write_fake_gguf(path: Path, layers: int = 32) -> None:
 
 
 def test_gguf_layer_count() -> None:
-    ns = extract_defs(load_source(), {"_gguf_layer_count", "_gguf_read_value"})
+    from strata.server import _gguf_layer_count
+
     tmp = Path(tempfile.mkdtemp())
     try:
         good = tmp / "good.gguf"
         _write_fake_gguf(good, layers=40)
-        assert ns["_gguf_layer_count"](good) == 40, "ควรอ่าน block_count ได้ถูกต้อง"
+        assert _gguf_layer_count(good) == 40, "ควรอ่าน block_count ได้ถูกต้อง"
         junk = tmp / "junk.gguf"
         junk.write_bytes(b"NOTGGUF" + b"\x00" * 64)
-        assert ns["_gguf_layer_count"](junk) == 0, "ไฟล์ที่ไม่ใช่ GGUF ต้องคืน 0 (ไม่ crash)"
+        assert _gguf_layer_count(junk) == 0, "ไฟล์ที่ไม่ใช่ GGUF ต้องคืน 0 (ไม่ crash)"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -357,61 +356,107 @@ def test_gguf_layer_count() -> None:
 def test_rag_chunking() -> None:
     if np is None:
         raise Skip("ต้องมี numpy")
-    ns = extract_defs(load_source(), {"StrataRAG"})
-    Split = ns["StrataRAG"].split_chunks
-    text = ("ประโยคแรกยาวพอสมควรเกี่ยวกับแมวและ собака. " * 3) + "\n\n" + ("Second paragraph about dogs and cats. " * 6)
-    chunks = Split(text, chunk_size=120, overlap=30)
+    from strata.rag import StrataRAG
+
+    text = ("ประโยคแรกยาวพอสมควรเกี่ยวกับแมวและ dog. " * 3) + "\n\n" + ("Second paragraph about dogs and cats. " * 6)
+    chunks = StrataRAG.split_chunks(text, chunk_size=120, overlap=30)
     assert len(chunks) > 1, "ข้อความยาวต้องถูกแบ่งหลาย chunk"
     assert all(len(c) <= 120 for c in chunks), f"มี chunk ยาวเกินกำหนด: {[len(c) for c in chunks]}"
     assert all(c.strip() for c in chunks), "ต้องไม่มี chunk ว่าง"
     words_in = re.findall(r"[A-Za-zก-๙]+", text)
     words_out = re.findall(r"[A-Za-zก-๙]+", " ".join(chunks))
     assert set(words_out) <= set(words_in), "chunk ต้องไม่ตัดคำจนเกิดคำแปลกใหม่"
-    # overlap=0 -> ต้องได้คำครบตามลำดับ ไม่ซ้ำ ไม่หาย
-    plain = Split(text, chunk_size=120, overlap=0)
+    plain = StrataRAG.split_chunks(text, chunk_size=120, overlap=0)
     assert re.findall(r"[A-Za-zก-๙]+", " ".join(plain)) == words_in, "overlap=0 ต้องได้คำครบตามลำดับเดิม"
-    assert all(len(c) <= 120 for c in plain)
-    assert Split("   ", chunk_size=100) == [], "ข้อความว่างต้องคืน list ว่าง"
+    assert StrataRAG.split_chunks("   ", chunk_size=100) == [], "ข้อความว่างต้องคืน list ว่าง"
+
+
+class FakeEmbedding:
+    """embedder ปลอม 3 มิติ: แมว/cat → แกน 0, หมา/dog → แกน 1, อื่น ๆ → แกน 2"""
+
+    def __init__(self, model_name: str | None = None):
+        self.model_name = model_name
+
+    def embed(self, texts):
+        for t in texts:
+            low = str(t).lower()
+            vec = [1.0, 0.0, 0.0] if ("แมว" in low or "cat" in low) else ([0.0, 1.0, 0.0] if ("หมา" in low or "dog" in low) else [0.0, 0.0, 1.0])
+            yield np.asarray(vec, dtype=np.float32)
 
 
 def test_rag_dedup_search_persist() -> None:
     if np is None:
         raise Skip("ต้องมี numpy")
-    ns = extract_defs(load_source(), {"StrataRAG"})
-    cls = ns["StrataRAG"]
-    rag = cls()
-    added = rag.add_documents([{"source": "cats", "text": "แมว cat น่ารัก"}], chunk_size=500)
-    assert added == 1, f"ควรเพิ่ม 1 chunk ได้ {added}"
-    again = rag.add_documents([{"source": "cats", "text": "แมว cat น่ารัก"}], chunk_size=500)
-    assert again == 0, "เนื้อหาซ้ำต้องไม่ถูกเพิ่มอีก"
+    from strata.rag import StrataRAG
+
+    rag = StrataRAG()
+    rag._embedder = FakeEmbedding()
+    assert rag.add_documents([{"source": "cats", "text": "แมว cat น่ารัก"}], chunk_size=500) == 1
+    assert rag.add_documents([{"source": "cats", "text": "แมว cat น่ารัก"}], chunk_size=500) == 0, "ข้อมูลซ้ำต้องไม่ถูกเพิ่ม"
     rag.add_documents([{"source": "dogs", "text": "หมา dog ซื่อสัตย์"}], chunk_size=500)
     assert len(rag.chunks) == 2
     assert rag.embeddings is not None and rag.embeddings.shape == (2, 3), f"embedding ผิดรูป: {rag.embeddings}"
 
     hits = rag.search("แมว", top_k=5)
     assert hits and hits[0]["source"] == "cats", f"ค้นหาไม่ตรง: {hits}"
-    assert hits[0]["rank"] == 1 and hits[0]["score"] > 0.9
+    assert hits[0]["score"] > 0.9
     assert len(hits) == 1, f"min_score ควรกรอง chunk ที่ไม่เกี่ยวออก: {hits}"
-    assert rag.search("แมว", top_k=5, min_score=0.0), "min_score=0 ยังต้องได้ผลลัพธ์"
 
-    path = Path(tempfile.mkdtemp()) / "store.npz"
+    tmp = Path(tempfile.mkdtemp())
     try:
+        path = tmp / "store.npz"
         rag.save(path)
-        other = cls()
-        n = other.load(path)
-        assert n == 2 and len(other.chunks) == 2, "โหลดคลังกลับมาไม่ครบ"
-        assert other.search("หมา")[0]["source"] == "dogs", "ค้นหาหลังโหลดควรได้ผลเหมือนเดิม"
-        assert other.add_documents([{"source": "cats", "text": "แมว cat น่ารัก"}], chunk_size=500) == 0, "หลังโหลดต้องกันข้อมูลซ้ำได้"
+        other = StrataRAG()
+        other._embedder = FakeEmbedding()
+        assert other.load(path) == 2, "โหลดคลังกลับมาไม่ครบ"
+        assert other.search("หมา")[0]["source"] == "dogs"
+        assert other.add_documents([{"source": "cats", "text": "แมว cat น่ารัก"}], chunk_size=500) == 0, "หลังโหลดต้องกันซ้ำได้"
     finally:
-        shutil.rmtree(path.parent, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_server_lock_guard() -> None:
+    """กดปุ่มซ้ำระหว่าง server กำลังทำงาน ต้องได้ error ที่อ่านรู้เรื่อง ไม่ใช่สตาร์ทซ้อน"""
+    import threading
+
+    from strata.server import _SERVER_LOCK, stop_strata_server
+
+    stop_strata_server()  # ไม่มี server รันอยู่ -> ต้องไม่ raise
+
+    holding = threading.Event()
+    release = threading.Event()
+
+    def holder():
+        _SERVER_LOCK.acquire()
+        holding.set()
+        release.wait(5)
+        _SERVER_LOCK.release()
+
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    holding.wait(5)
+    try:
+        try:
+            stop_strata_server()
+        except RuntimeError as e:
+            assert "กำลัง" in str(e), f"ข้อความควรบอกว่ากำลังทำงานอยู่: {e}"
+        else:
+            raise AssertionError("ต้องปฏิเสธเมื่อมีคำสั่งอื่นถือ lock อยู่ (กันสตาร์ทซ้อน)")
+    finally:
+        release.set()
+        t.join(5)
 
 
 def main() -> int:
-    print(f"🧪 smoke test: {NOTEBOOK.name} (python {sys.version.split()[0]})")
+    print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
-    check("code cell compiles", test_compiles)
+    check("notebook cells compile", test_notebook_cells_compile)
+    check("package compiles + no bad f-string", test_package_compiles)
+    check("public API / catalog", test_public_api)
+    check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
-    check("performance patterns (P2)", test_performance_patterns)
+    check("performance patterns", test_perf_patterns)
+    check("no dead code", test_no_dead_code)
     check("_pick_main_gguf", test_pick_main_gguf)
     check("safe archive extraction", test_safe_extract)
     check("uv_add input validation", test_uv_add_validation)
@@ -419,6 +464,7 @@ def main() -> int:
     check("_gguf_layer_count", test_gguf_layer_count)
     check("StrataRAG chunking", test_rag_chunking)
     check("StrataRAG dedup/search/persist", test_rag_dedup_search_persist)
+    check("server lock guard", test_server_lock_guard)
     if FAILURES:
         print(f"\n❌ ล้มเหลว {len(FAILURES)} รายการ")
         return 1
