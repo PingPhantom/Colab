@@ -1,4 +1,12 @@
-{
+"""เทมเพลต flake.nix (เก็บเป็นสตริงในโค้ด — ไม่มีไฟล์ภายนอกให้หายตอน clone)
+
+เดิมอ่านจาก `strata/templates/flake.nix` ซึ่งเคยหลุด .gitignore แล้วทำให้
+`write_flake()` พังด้วย FileNotFoundError บน Colab
+"""
+
+from __future__ import annotations
+
+FLAKE_TEMPLATE = """{
   description = "Strata Studio devshell — llama.cpp tooling, huggingface-hub, uv, ruff";
 
   # ปักหมุด nixpkgs เพื่อให้ env เดิมทุกครั้ง (อัปเดตเองได้โดยแก้ค่านี้)
@@ -45,3 +53,4 @@
       };
     };
 }
+"""

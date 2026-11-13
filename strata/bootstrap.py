@@ -28,12 +28,12 @@ from .config import (
     NVIDIA_LIB_DIRS,
     STRATA_HOME,
 )
+from .flake_template import FLAKE_TEMPLATE
 from .utils import run_quiet, run_stream
 
 # ปักหมุด nixpkgs (nixos-unstable ณ 2026-11-11) — แก้ค่านี้เมื่อต้องการอัปเดต env
 NIXPKGS_REV = "d4f25a3e562008648d45bcf2d70bcc7422cad84e"
 NIX_INSTALL_URL = "https://nixos.org/nix/install"
-FLAKE_TEMPLATE = Path(__file__).parent / "templates" / "flake.nix"
 
 # ใช้เมื่อ repo ไม่มี pyproject.toml (ปกติ repo นี้มี — แล้วจะใช้ `uv sync`)
 FALLBACK_DEPS = [
@@ -112,7 +112,7 @@ def write_flake(repo_id: str = CUSTOM_HF_REPO) -> Path:
     target = Path("flake.nix")
     py_ver = f"python{sys.version_info.major}{sys.version_info.minor}"
     content = (
-        FLAKE_TEMPLATE.read_text(encoding="utf-8")
+        FLAKE_TEMPLATE
         .replace("@NIXPKGS_REV@", NIXPKGS_REV)
         .replace("@PY_VER@", py_ver)
         .replace("@CUSTOM_HF_REPO@", repo_id)
