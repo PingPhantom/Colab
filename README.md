@@ -59,6 +59,8 @@
 > ```
 >
 > แล้วเซลล์ 2 ใช้แค่ 3 บรรทัด: `from strata.notebook import launch, register_magics` → `register_magics()` → `ui = launch()`
+>
+> ⚠️ หลังจากวาง snippet แล้ว **อย่ารันเซลล์ 1 เวอร์ชันเก่าซ้ำ** — มันจะลบ `/content/Colab` แล้ว clone branch หลักทับ (ถ้าจำเป็นให้ลบเซลล์นั้นทิ้ง)
 
 > ยังไม่ merge PR ก็ใช้ได้: เว้น `REPO_BRANCH` ว่างไว้ เซลล์ 1 จะหา branch ที่มีแพ็กเกจ `strata/` เอง
 > (ถาม GitHub API ว่า PR ไหนเปิดอยู่ แล้วไล่ `git clone --branch` ทีละตัว)
