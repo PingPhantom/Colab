@@ -144,6 +144,68 @@ def write_flake(repo_id: str = CUSTOM_HF_REPO, flake_dir: Path | None = None) ->
     return target
 
 
+NIX_BIN_DIRS = ("~/.nix-profile/bin", "/nix/var/nix/profiles/default/bin")
+NIX_BINARIES = ("nix", "nix-store", "nix-env", "nix-build", "nix-shell", "nix-instantiate", "nix-channel", "nix-hash")
+SHELL_MARK = "# >>> strata nix >>>"
+SHELL_SNIPPET = (
+    f"{SHELL_MARK}\n"
+    "# ให้ `nix` ใช้ได้ในทุก shell (Colab terminal, bash -lc, ฯลฯ)\n"
+    'export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"\n'
+    f"# <<< strata nix <<<\n"
+)
+
+
+def persist_shell_env(profile_dir: Path | None = None, bashrc: Path | None = None) -> dict:
+    """ทำให้ `nix` ใช้ได้ใน shell ใหม่ (ไม่ใช่แค่ใน kernel) — เขียน /etc/profile.d + ~/.bashrc
+
+    ปัญหาที่แก้: `ensure_paths()` เติม PATH ให้เฉพาะ process ของ kernel ทำให้เปิด terminal
+    ของ Colab แล้วเจอ `nix: command not found`
+    """
+    written: list = []
+    pdir = Path(profile_dir or "/etc/profile.d")
+    try:
+        pdir.mkdir(parents=True, exist_ok=True)
+        target = pdir / "strata-nix.sh"
+        if not target.exists() or target.read_text(encoding="utf-8", errors="ignore") != SHELL_SNIPPET:
+            target.write_text(SHELL_SNIPPET, encoding="utf-8")
+            written.append(str(target))
+    except OSError:
+        pass
+
+    rc = Path(bashrc or (Path.home() / ".bashrc"))
+    try:
+        old = rc.read_text(encoding="utf-8", errors="ignore") if rc.exists() else ""
+        if SHELL_MARK not in old:
+            rc.parent.mkdir(parents=True, exist_ok=True)
+            rc.write_text(old + ("\n" if old and not old.endswith("\n") else "") + SHELL_SNIPPET, encoding="utf-8")
+            written.append(str(rc))
+    except OSError:
+        pass
+    return {"written": written, "snippet": SHELL_SNIPPET}
+
+
+def link_nix_binaries(bin_dir: Path | None = None) -> list:
+    """symlink คำสั่ง nix ไป /usr/local/bin (อยู่ใน PATH มาตรฐานทุก shell)"""
+    dst_dir = Path(bin_dir or "/usr/local/bin")
+    linked: list = []
+    for name in NIX_BINARIES:
+        src = shutil.which(name)
+        if not src:
+            src = next((str(Path(d).expanduser() / name) for d in NIX_BIN_DIRS if (Path(d).expanduser() / name).exists()), None)
+        if not src or not Path(src).exists():
+            continue
+        dst = dst_dir / name
+        try:
+            if dst.exists() and dst.resolve() == Path(src).resolve():
+                continue
+            dst.unlink(missing_ok=True)
+            dst.symlink_to(src)
+            linked.append(str(dst))
+        except OSError:
+            continue
+    return linked
+
+
 def link_tools() -> None:
     """วาง symlink ของ tool จาก devshell ไว้ใน /usr/local/bin (ทับได้ ไม่ลบของเดิม)"""
     # bash/sh: symlink ไปของจริงแทนการลบ (เดิมลบทิ้ง ซึ่งเสี่ยงกับ runtime ของ Colab)
@@ -280,6 +342,8 @@ def ensure_environment(skip_devshell: bool = False) -> dict:
     ensure_paths()
     write_nix_conf()
     install_nix()
+    persist_shell_env()  # ให้ terminal/shell ใหม่มี nix ใน PATH ด้วย
+    link_nix_binaries()
     write_flake()
     if not skip_devshell:
         try:
@@ -305,4 +369,5 @@ def ensure_environment(skip_devshell: bool = False) -> dict:
         "model_dir": MODEL_DIR,
         "flake_dir": str(FLAKE_DIR),
         "missing_tools": missing,
+        "nix_in_path": bool(shutil.which("nix")),
     }

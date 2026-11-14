@@ -1036,6 +1036,45 @@ def test_spec_flag_compat() -> None:
     assert "speculative" in hint.lower() or "spec" in hint.lower(), f"ต้องมี hint เรื่อง option: {hint}"
 
 
+def test_shell_env_persistence() -> None:
+    """`nix` ต้องใช้ได้ใน terminal/shell ใหม่ (ไม่ใช่แค่ใน kernel) ไม่งั้นเจอ `nix: command not found`"""
+    from strata import bootstrap as bs
+
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        profile, rc = tmp / "profile.d", tmp / ".bashrc"
+        info = bs.persist_shell_env(profile, rc)
+        assert (profile / "strata-nix.sh").is_file(), "ต้องเขียน /etc/profile.d/strata-nix.sh"
+        rc_text = rc.read_text(encoding="utf-8")
+        assert bs.SHELL_MARK in rc_text, "ต้องเติม snippet ลง ~/.bashrc"
+        assert "nix/var/nix/profiles/default/bin" in rc_text, "PATH ต้องมี bin ของ nix"
+        assert info["written"], "ต้องรายงานไฟล์ที่เขียน"
+
+        # เรียกซ้ำต้องไม่ต่อ snippet ซ้ำ
+        bs.persist_shell_env(profile, rc)
+        assert rc.read_text(encoding="utf-8").count(bs.SHELL_MARK) == 1, "เรียกซ้ำแล้วต้องไม่ซ้ำ"
+        prof_txt = (profile / "strata-nix.sh").read_text(encoding="utf-8")
+        assert prof_txt.count("export PATH=") == 1, f"profile.d ผิดรูป: {prof_txt}"
+        assert "$HOME/.nix-profile/bin" in prof_txt, "ต้องมี ~/.nix-profile/bin ใน PATH"
+
+        # symlink คำสั่ง nix ไป /usr/local/bin (PATH มาตรฐานของทุก shell)
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        fake_nix = tmp / "nix-real"
+        fake_nix.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_nix.chmod(0o755)
+        real_which = bs.shutil.which
+        bs.shutil.which = lambda name: str(fake_nix) if name == "nix" else None
+        try:
+            linked = bs.link_nix_binaries(bindir)
+        finally:
+            bs.shutil.which = real_which
+        assert linked and (bindir / "nix").is_symlink(), f"ต้อง symlink nix: {linked}"
+        assert (bindir / "nix").resolve() == fake_nix.resolve()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -1058,6 +1097,7 @@ def main() -> int:
     check("downloader fallback", test_downloader_fallback)
     check("prebuilt libc isolation (glibc)", test_prebuilt_glibc_isolation)
     check("GPU memory preflight", test_gpu_memory_preflight)
+    check("shell env persistence (nix in PATH)", test_shell_env_persistence)
     check("spec flag compatibility", test_spec_flag_compat)
     check("notebook repo bootstrap", test_notebook_repo_bootstrap)
     check("stale module purge", test_purge_modules)

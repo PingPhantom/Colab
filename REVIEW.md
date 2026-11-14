@@ -262,6 +262,19 @@ release ใหม่ตอบกลับ `error while handling argument "--draf
 
 ---
 
+## 🐞 P1: `nix: command not found` เมื่อเปิด terminal/shell ใหม่
+
+`ensure_paths()` เติม PATH ให้เฉพาะ process ของ kernel → เปิด terminal ของ Colab (หรือ `!bash -lc`)
+แล้วหา `nix` ไม่เจอ เพราะ `/nix/var/nix/profiles/default/bin` ไม่ได้อยู่ใน PATH ของ shell นั้น
+
+- `persist_shell_env()`: เขียน `/etc/profile.d/strata-nix.sh` + เติม snippet (มี marker กันซ้ำ) ลง `~/.bashrc`
+- `link_nix_binaries()`: symlink `nix`, `nix-store`, `nix-env`, `nix-build`, `nix-shell`, `nix-instantiate`,
+  `nix-channel`, `nix-hash` ไป `/usr/local/bin` (อยู่ใน PATH มาตรฐานของทุก shell)
+- เรียกทั้งคู่ใน `ensure_environment()` หลัง `install_nix()`; คืน `nix_in_path` ใน dict สรุป
+- เทสต์ `shell env persistence`: เขียน/ไม่ซ้ำ/ตรวจ PATH + symlink ชี้ไปไบนารีจริง (ใช้โฟลเดอร์ชั่วคราว)
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
