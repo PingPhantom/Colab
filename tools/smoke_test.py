@@ -1108,6 +1108,13 @@ def test_catalog_download_patterns() -> None:
     assert not picks(q, "mmproj-F32.gguf"), "ไม่ต้องโหลด mmproj ซ้ำหลายแบบ"
     assert MODEL_CATALOG[q]["has_mtp"] is True, "รุ่นนี้มี MTP head"
 
+    t2 = "qwen38-27b-turbo-fable"
+    assert picks(t2, "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-IQ4_XS.gguf")
+    assert not picks(t2, "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-LOW-MTP-IQ4_XS.gguf"), "LOW-MTP ซ้ำ"
+    assert not picks(t2, "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-IQ4_XS.gguf"), "รุ่นไม่-MTP ซ้ำ"
+    assert not picks(t2, "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q8_0.gguf"), "โหลด quant เดียว"
+    assert picks(t2, "mmproj-F16.gguf") and MODEL_CATALOG[t2]["has_mtp"] is True
+
     d = "deepseek-v41-flash-abliterated"
     assert picks(d, "Mix-128G/DeepSeek-V4.1-Flash-1017-abliterated-Mix-128G-00001-of-00005.gguf")
     assert not picks(d, "Mix-256G/DeepSeek-V4.1-Flash-1017-abliterated-Mix-256G-00001-of-00007.gguf"), "ข้ามชุด 256G"

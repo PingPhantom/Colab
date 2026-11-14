@@ -19,8 +19,8 @@ ModelOptionType = Literal[
     "none", "all", "sakura-minimax-h3", "qwen38-27b-cyber",
     "qwen38-27b-rvn-heretic", "qwen38-27b-coletti", "muse-glimmer-30b-heretic",
     "minicpm-v47-35b", "lfm25-24b-a2b", "qwen35-9b-defiant-fable",
-    "ornith-15-9b", "nemotron-35-bolt-74b", "deepseek-v41-flash-abliterated",
-    "custom",
+    "ornith-15-9b", "nemotron-35-bolt-74b",
+    "deepseek-v41-flash-abliterated", "qwen38-27b-turbo-fable", "custom",
 ]
 
 ALL_PRESET_KEYS: list[str] = [
@@ -28,6 +28,7 @@ ALL_PRESET_KEYS: list[str] = [
     "qwen38-27b-coletti", "muse-glimmer-30b-heretic", "minicpm-v47-35b",
     "lfm25-24b-a2b", "qwen35-9b-defiant-fable", "ornith-15-9b",
     "nemotron-35-bolt-74b", "deepseek-v41-flash-abliterated",
+    "qwen38-27b-turbo-fable",
 ]
 
 MODEL_OPTION: ModelOptionType = "none"
@@ -93,6 +94,16 @@ MODEL_CATALOG: dict[str, dict] = {
     },
     "ornith-15-9b": {"repo_id": "mradermacher/Ornith-1.5-9B-uncensored-GGUF", "include": ["*Q4_K_M*", "*mmproj-Q8_0*"], "exclude": None, "approx_gb": 6.4, "has_mtp": False, "desc": "🦅 Ornith-1.5-9B-uncensored (Q4_K_M) ลง T4 ได้ทั้งตัว"},
     "nemotron-35-bolt-74b": {"repo_id": "AtomicChat/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Uncensored-GGUF", "include": ["*IQ2*", "*IQ3_XXS*", "*mmproj*"], "exclude": None, "approx_gb": 24.5, "has_mtp": False, "desc": "🚀 Nemotron-3.5-Bolt-74B-A9B (9B active MoE)"},
+    # DavidAU "TURBO Cold-Fusion 735-882" — repo มีทั้งรุ่น MTP / LOW-MTP / ไม่-MTP
+    # (ชื่อไฟล์ลงท้าย ...-MAX-MTP-<quant>.gguf) ใช้ MTP IQ4_XS 17.0GB + mmproj F16
+    "qwen38-27b-turbo-fable": {
+        "repo_id": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF",
+        "include": ["*-MAX-MTP-IQ4_XS.gguf", "mmproj-F16.gguf"],
+        "exclude": ["*LOW-MTP*", "mmproj-*BF16*", "mmproj-*F32*"],
+        "approx_gb": 16.8,
+        "has_mtp": True,
+        "desc": "🧊 Qwen3.8-27B-TurboFCFusion 735-882 Heretic CODER (MTP IQ4_XS 16.7GB)",
+    },
     # ⚠️ โมเดลระดับ data-center: Mix-128G ≈ 225 GB (Mix-256G ≈ 346 GB) — ต้องมีดิสก์ ≥ 250 GB
     # และ RAM/VRAM มาก (A100/H100 หรือ offload ลง CPU) ไม่เหมาะกับ Colab ฟรี (ดิสก์ ~110 GB)
     "deepseek-v41-flash-abliterated": {

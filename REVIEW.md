@@ -310,6 +310,25 @@ release ใหม่ตอบกลับ `error while handling argument "--draf
 
 ---
 
+## 🧊 เพิ่ม preset: `qwen38-27b-turbo-fable`
+
+`DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF`
+
+repo มี 3 ตระกูลไฟล์ชื่อคล้ายกันมาก: `...-MAX-<q>.gguf` (ไม่มี MTP),
+`...-MAX-MTP-<q>.gguf` และ `...-MAX-LOW-MTP-<q>.gguf`
+
+- `include`: `["*-MAX-MTP-IQ4_XS.gguf", "mmproj-F16.gguf"]` → 16.73 GB จริง
+- `exclude`: `["*LOW-MTP*", "mmproj-*BF16*", "mmproj-*F32*"]` (กัน LOW-MTP 17.0→ ซ้ำ
+  เพราะท้ายชื่อก็เป็น `MTP-IQ4_XS.gguf` เหมือนกัน)
+- `has_mtp: True`, `approx_gb: 16.8`
+- quant อื่นในเรพอ: IQ2_M 12.1, IQ3_M 14.5, Q4_K_M 18.5, Q5_K_M 21.2, Q6_K 24.0, Q8_0 30.2 GB
+  (LOW-MTP: IQ4_XS 15.3, Q6_K 22.4)
+- ⚠️ T4 (VRAM ใช้ได้ ~12.4 GB) → ต้อง offload ลง RAM (มีคำเตือนจาก `start_strata_server`)
+  ถ้าอยากให้พอดี T4 เปลี่ยน include เป็น `*-MAX-MTP-IQ2_M.gguf` (12.1 GB)
+- เทสต์ `catalog download patterns` เพิ่มเคสนี้: ต้องเลือกเฉพาะไฟล์ MTP IQ4_XS, ข้าม LOW-MTP/ไม่มี-MTP/Q8_0
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

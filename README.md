@@ -11,7 +11,7 @@
 
 ## ✨ ความสามารถ
 
-- **11 โมเดล preset + custom repo** — ดาวน์โหลด/ลบ/เก็บตัวเดียว, เช็กดิสก์และ VRAM ก่อนโหลด
+- **12 โมเดล preset + custom repo** — ดาวน์โหลด/ลบ/เก็บตัวเดียว, เช็กดิสก์และ VRAM ก่อนโหลด
   (รวม `orcarouter/DeepSeek-V4.1-Flash-1017-abliterated-GGUF` — MoE ~225GB สำหรับ A100/H100)
 - **Speculative decoding** — MTP, external draft model, N-gram พร้อม fallback อัตโนมัติเมื่อโหมดใดโหลดไม่ได้
 - **เลือก quant อัตโนมัติ** — อ่านจำนวน layer จริงจากหัวไฟล์ GGUF แล้วคำนวณ `--n-gpu-layers` ให้พอดี VRAM
