@@ -11,7 +11,9 @@
 
 ## ✨ ความสามารถ
 
-- **12 โมเดล preset + custom repo** — ดาวน์โหลด/ลบ/เก็บตัวเดียว, เช็กดิสก์และ VRAM ก่อนโหลด
+- **13 โมเดล preset + custom repo** — ดาวน์โหลด/ลบ/เก็บตัวเดียว, เช็กดิสก์และ VRAM ก่อนโหลด
+- **🎨 สร้างภาพ (ComfyUI + GGUF)** — llama.cpp สร้างภาพไม่ได้ (`mmproj` = อ่านภาพเท่านั้น) แท็บ 5 จึงโหลดโมเดลภาพ GGUF
+  (Qwen-Image-2.1 / FLUX-3-Klein) แล้วผูกเข้า ComfyUI อัตโนมัติ + เปิด/หยุดเซิร์ฟเวอร์ที่พอร์ต 8188 ให้ (`--lowvram` สำหรับ T4)
   (รวม `orcarouter/DeepSeek-V4.1-Flash-1017-abliterated-GGUF` — MoE ~225GB สำหรับ A100/H100)
 - **Speculative decoding** — MTP, external draft model, N-gram พร้อม fallback อัตโนมัติเมื่อโหมดใดโหลดไม่ได้
 - **เลือก quant อัตโนมัติ** — อ่านจำนวน layer จริงจากหัวไฟล์ GGUF แล้วคำนวณ `--n-gpu-layers` ให้พอดี VRAM
@@ -87,13 +89,14 @@ jupyter lab                 # แล้วเปิด nix.ipynb
 
 ```
 strata/
-├── config.py       # ค่าคงที่: พอร์ต, path, MODEL_CATALOG, DRAFT_CATALOG, SPEC_STATE (ไม่พึ่ง lib ภายนอก)
+├── config.py       # ค่าคงที่: พอร์ต, path, MODEL_CATALOG, IMAGE_CATALOG, DRAFT_CATALOG, SPEC_STATE
 ├── bootstrap.py    # เตรียม Nix + flake (ปักหมุด rev) + uv venv ให้ kernel ใช้ได้ทันที
 ├── utils.py        # รัน shell อย่างปลอดภัย, cache ขนาดโฟลเดอร์, แตก tar/zip อย่างปลอดภัย
 ├── download.py     # ดาวน์โหลด/ติดตั้ง/ลบโมเดล + draft model
 ├── server.py       # ติดตั้ง llama.cpp, เลือก quant/layer, สตาร์ท/หยุด server, OpenAI client
 ├── rag.py          # StrataRAG: chunking, embedding, search, persist
-├── ui.py           # ipywidgets UI 4 แท็บ
+├── imagegen.py     # สร้างภาพ: ดาวน์โหลดโมเดลภาพ, ผูกเข้า ComfyUI, เปิด/หยุดเซิร์ฟเวอร์
+├── ui.py           # ipywidgets UI 5 แท็บ
 ├── notebook.py     # ตัวช่วยใน notebook: register_magics(), launch()
 └── templates/
     └── flake.nix   # devshell template (แทนที่ rev/py version ตอน bootstrap)

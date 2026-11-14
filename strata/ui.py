@@ -1,4 +1,4 @@
-"""Studio UI (ipywidgets) 4 แท็บ: โมเดล&ดิสก์, แชท+RAG, คลัง PDF, เปรียบเทียบโมเดล."""
+"""Studio UI (ipywidgets) 5 แท็บ: โมเดล&ดิสก์, แชท+RAG, คลัง PDF, เปรียบเทียบโมเดล."""
 from __future__ import annotations
 
 import glob
@@ -16,10 +16,13 @@ from rich import print as rprint
 
 from .config import (
     ALL_PRESET_KEYS,
+    COMFY_PORT,
     DEFAULT_PORT,
     DEFAULT_RAG_PATH,
     DRAFT_CATALOG,
     DRAFT_DIR,
+    IMAGE_CATALOG,
+    IMAGE_PRESET_KEYS,
     LLAMA_LOG_FILE,
     MODEL_CATALOG,
     MODEL_DIR,
@@ -33,6 +36,14 @@ from .download import (
     install_model,
     keep_only_models,
     remove_model,
+)
+from .imagegen import (
+    comfyui_status,
+    ensure_comfyui,
+    image_model_status,
+    install_image_model,
+    start_comfyui,
+    stop_comfyui,
 )
 from .rag import GLOBAL_RAG, StrataRAG
 from .server import (
@@ -559,8 +570,82 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
     b_arena.on_click(_run_arena)
     tab4 = widgets.VBox([widgets.HBox(list(a_chks.values()), layout=_L(flex_flow="row wrap", gap="6px")), widgets.HBox([a_rag, a_dl, a_temp_sl, a_max_sl], layout=_L(gap="12px", flex_flow="row wrap")), widgets.HBox([a_in, b_arena], layout=_L(gap="6px")), a_stat, a_box])
 
-    tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4])
-    for idx, ttl in enumerate(["📦 1. โมเดล & ดิสก์ (10 ตัว)", "💬 2. แชท + RAG", "📚 3. คลัง PDF RAG", "⚔️ 4. เปรียบเทียบโมเดล"]):
+    # --- TAB 5: สร้างภาพ (ComfyUI + GGUF) ---
+    im_dd = widgets.Dropdown(
+        options=[(f"{k} — {IMAGE_CATALOG[k]['desc']}", k) for k in IMAGE_PRESET_KEYS],
+        layout=_L(width="100%"),
+    )
+    b_im_install = _B("🎨 ติดตั้งโมเดลภาพ", "primary", "165px")
+    b_im_start = _B("▶️ เปิด ComfyUI", "success", "150px")
+    b_im_stop = _B("⏹ หยุด ComfyUI", "danger", "145px")
+    im_stat = widgets.HTML()
+    im_out = widgets.Output(layout={"border": "1px solid #334155", "max_height": "240px", "overflow": "auto"})
+
+    def _im_refresh() -> None:
+        key = im_dd.value
+        st = image_model_status(key)
+        cs = comfyui_status(port=COMFY_PORT)
+        cfg = IMAGE_CATALOG[key]
+        tone = "#4ade80" if st["downloaded"] else "#94a3b8"
+        comfy_tone = "#4ade80" if cs["online"] else "#94a3b8"
+        link = (
+            f"<div><a href='{cs['url']}' target='_blank' style='color:#38bdf8;'>🔗 เปิดหน้า ComfyUI</a></div>"
+            if cs["url"]
+            else "<div style='color:#94a3b8;font-size:11px;'>ยังไม่เปิด ComfyUI — กด ▶️ เปิด ComfyUI</div>"
+        )
+        im_stat.value = (
+            "<div style='font-family:sans-serif;font-size:12px;line-height:1.7;'>"
+            f"<b style='color:{tone};'>{'✅ โมเดลครบ' if st['downloaded'] else '⬜ ยังไม่โหลด'}</b> "
+            f"({st['gb']}/{cfg['approx_gb']} GB)<br>"
+            f"<span style='color:{comfy_tone};'>🎨 ComfyUI: {'ออนไลน์' if cs['online'] else 'ออฟไลน์'}</span>"
+            f" • ติดตั้งแล้ว={cs['installed']} • พอร์ต {COMFY_PORT}<br>{link}</div>"
+        )
+
+    def _on_im_install(_):
+        key = im_dd.value
+        _act(lambda: install_image_model(key))
+        _im_refresh()
+
+    def _on_im_start(_):
+        def _job():
+            ensure_comfyui()
+            start_comfyui(port=COMFY_PORT)
+            _im_refresh()
+
+        _act(_job)
+        _im_refresh()
+
+    def _on_im_stop(_):
+        _act(stop_comfyui)
+        _im_refresh()
+
+    b_im_install.on_click(_on_im_install)
+    b_im_start.on_click(_on_im_start)
+    b_im_stop.on_click(_on_im_stop)
+    im_dd.observe(lambda _chg: _im_refresh(), names="value")
+    _im_refresh()
+
+    tab5 = widgets.VBox([
+        widgets.HTML(
+            "<div style='font-size:12px;color:#cbd5e1;line-height:1.6;'>"
+            "🎨 <b>สร้างภาพ</b> ใช้ <b>ComfyUI + ComfyUI-GGUF</b> (คนละเอนจินกับ llama.cpp) — "
+            "โมเดลข้อความ GGUF <b>สร้างภาพไม่ได้</b> ปุ่มนี้จะโหลดโมเดลภาพ, ผูกเข้า ComfyUI และเปิดหน้าเว็บให้ "
+            "(T4 แนะนำโหมด lowvram ที่ตั้งไว้ให้แล้ว)</div>"
+        ),
+        im_dd,
+        widgets.HBox([b_im_install, b_im_start, b_im_stop], layout=_L(flex_flow="row wrap", gap="6px")),
+        im_stat,
+        im_out,
+    ])
+
+    tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4, tab5])
+    for idx, ttl in enumerate([
+        f"📦 1. โมเดล & ดิสก์ ({len(ALL_PRESET_KEYS)} ตัว)",
+        "💬 2. แชท + RAG",
+        "📚 3. คลัง PDF RAG",
+        "⚔️ 4. เปรียบเทียบโมเดล",
+        "🎨 5. สร้างภาพ (ComfyUI)",
+    ]):
         tabs.set_title(idx, ttl)
     live_ref = None
 

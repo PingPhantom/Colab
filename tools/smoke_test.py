@@ -1121,6 +1121,72 @@ def test_catalog_download_patterns() -> None:
     assert not picks(d, "imatrix.gguf"), "imatrix ใช้ตอนทำ quant เท่านั้น"
 
 
+def test_image_catalog() -> None:
+    """แคตตาล็อกโมเดลสร้างภาพ: ชื่อไฟล์/โฟลเดอร์ปลายทางต้องถูก และต้องไม่ปนกับโมเดลข้อความ"""
+    from strata.config import COMFY_MODEL_SUBDIRS, IMAGE_CATALOG, IMAGE_PRESET_KEYS, MODEL_CATALOG
+
+    assert list(IMAGE_CATALOG) == IMAGE_PRESET_KEYS and IMAGE_PRESET_KEYS, "ต้องมีโมเดลภาพอย่างน้อย 1 ตัว"
+    assert not (set(IMAGE_PRESET_KEYS) & set(MODEL_CATALOG)), "key โมเดลภาพต้องไม่ทับกับโมเดลข้อความ"
+    assert not any("image" in str(c["repo_id"]).lower() for c in MODEL_CATALOG.values()), (
+        "repo โมเดลสร้างภาพต้องไม่อยู่ใน MODEL_CATALOG (llama.cpp รันไม่ได้)"
+    )
+    for key, cfg in IMAGE_CATALOG.items():
+        assert re.fullmatch(r"[\w.\-]+/[\w.\-]+", cfg["repo_id"]), f"{key}: repo_id ผิดรูป"
+        targets = cfg["targets"]
+        assert targets, f"{key}: ต้องระบุไฟล์"
+        assert all(sub in COMFY_MODEL_SUBDIRS for sub in targets.values()), f"{key}: โฟลเดอร์ปลายทางไม่รองรับ"
+        assert all(str(f).endswith((".gguf", ".safetensors")) for f in targets), f"{key}: นามสกุลไฟล์ผิด"
+        assert "diffusion_models" in targets.values(), f"{key}: ต้องมี diffusion model"
+        assert isinstance(cfg["approx_gb"], (int, float)) and cfg["approx_gb"] > 0, f"{key}: approx_gb ผิด"
+        assert isinstance(cfg["desc"], str) and cfg["desc"], f"{key}: ต้องมี desc"
+
+
+def test_imagegen_helpers() -> None:
+    """ตัวช่วย ComfyUI: คำสั่ง, ตำแหน่ง symlink, การผูกไฟล์ และสถานะ (ไม่ต้องมี GPU/เน็ต)"""
+    import tempfile
+
+    from strata import imagegen as ig
+
+    assert ig.include_patterns("qwen-image-21-uncensored"), "ต้องมี pattern ดาวน์โหลด"
+
+    cmd = ig.comfyui_command(port=8188)
+    assert cmd[1] == "main.py", f"คำสั่งต้องเรียก main.py: {cmd}"
+    assert "--listen" in cmd and cmd[cmd.index("--listen") + 1] == "0.0.0.0", "ต้อง listen 0.0.0.0 ให้ Colab proxy เข้าได้"
+    assert cmd[cmd.index("--port") + 1] == "8188"
+    assert "--lowvram" in cmd, "ค่าเริ่มต้นควรเป็น lowvram สำหรับ T4"
+    assert "--lowvram" not in ig.comfyui_command(8188, lowvram=False)
+
+    dst = ig.comfy_target_path("flux-3-klein-uncensored", "FLUX-3-Image-Klein-pup-Uncensored-AD-Q5_K_M.gguf", "/tmp/cf")
+    assert dst.as_posix() == "/tmp/cf/models/diffusion_models/FLUX-3-Image-Klein-pup-Uncensored-AD-Q5_K_M.gguf", str(dst)
+
+    raised = False
+    try:
+        ig.comfy_target_path("flux-3-klein-uncensored", "ไม่มีไฟล์นี้.gguf", "/tmp/cf")
+    except (KeyError, ValueError):
+        raised = True
+    assert raised, "ไฟล์ที่ไม่รู้จักต้อง error ชัดเจน"
+
+    st = ig.image_model_status("flux-3-klein-uncensored", "/tmp/definitely-no-such-dir")
+    assert st["downloaded"] is False and len(st["missing"]) == 2, st
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "models_src" / "flux-3-klein-uncensored"
+        src_dir = base / "nested"
+        src_dir.mkdir(parents=True)
+        for rel in ig.include_patterns("flux-3-klein-uncensored"):
+            (base / rel).parent.mkdir(parents=True, exist_ok=True)
+            (base / rel).write_bytes(b"GGUF")
+        comfy = Path(tmp) / "ComfyUI"
+        linked = ig.link_image_model("flux-3-klein-uncensored", base, comfy_dir=comfy)
+        assert len(linked) == 2, f"ต้องผูกครบ 2 ไฟล์: {linked}"
+        for p in linked.values():
+            assert Path(p).is_symlink() and Path(p).exists()
+        again = ig.link_image_model("flux-3-klein-uncensored", base, comfy_dir=comfy)
+        assert len(again) == 2, "ผูกซ้ำต้องไม่พัง"
+        st2 = ig.image_model_status("flux-3-klein-uncensored", base)
+        assert st2["downloaded"] is True and st2["gb"] >= 0
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -1128,6 +1194,8 @@ def main() -> int:
     check("package compiles + no bad f-string", test_package_compiles)
     check("public API / catalog", test_public_api)
     check("catalog download patterns", test_catalog_download_patterns)
+    check("image model catalog", test_image_catalog)
+    check("comfyui helpers", test_imagegen_helpers)
     check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
     check("performance patterns", test_perf_patterns)

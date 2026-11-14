@@ -329,6 +329,31 @@ repo มี 3 ตระกูลไฟล์ชื่อคล้ายกัน
 
 ---
 
+## 🎨 imagegen: สร้างภาพด้วย ComfyUI + GGUF (แท็บ 5)
+
+โจทย์: ผู้ใช้อยาก "สร้างภาพ" จากโมเดล GGUF — ซึ่งเป็นไปไม่ได้ใน llama.cpp (`mmproj` = vision *input*)
+จึงแยกเส้นทางใหม่ทั้งชุด ไม่ปนกับ `MODEL_CATALOG` (llama-server จะพังถ้าไปเจอ diffusion gguf)
+
+- `strata/config.py`: `IMAGE_CATALOG` + `IMAGE_PRESET_KEYS` + `IMAGE_DIR`, `COMFY_DIR`, `COMFY_PORT=8188`,
+  `COMFY_MODEL_SUBDIRS` — แต่ละ entry มี `targets` = {ไฟล์ในเรพโอ: โฟลเดอร์ย่อยของ ComfyUI}
+  - `qwen-image-21-uncensored` (sdadfas/Qwen-Image-2.1-Uncensored-GGUF): Q4_K_M 4.60 GB +
+    `text_encoders/qwen3vl_8b_int8_convrot.safetensors` 9.35 GB + `vae/qwen_image_2.1_vae_bf16.safetensors` 0.68 GB ≈ 14.6 GB
+  - `flux-3-klein-uncensored` (AtomicChat/FLUX-3-Image-Klein-pup-Uncensored-GGUF): Q5_K_M 6.57 GB + mmproj-F16 0.92 GB ≈ 7.5 GB
+    (เรพนี้ไม่มี VAE/CLIP แยก — ComfyUI อาจต้องใช้ตัวที่มากับ FLUX เอง)
+- `strata/imagegen.py` (ใหม่): `include_patterns`, `comfy_target_path`, `image_model_status`,
+  `link_image_model` (symlink เข้า `ComfyUI/models/<subdir>`, ทำซ้ำได้), `install_image_model`
+  (ใช้ `download_model_files` เดิม → ตรวจดิสก์/รายงาน GB), `ensure_comfyui` (clone ComfyUI + ComfyUI-GGUF,
+  pip install requirements + gguf), `comfyui_command` (listen 0.0.0.0 : 8188, `--lowvram`),
+  `start_comfyui`/`stop_comfyui`/`comfyui_status`, `comfyui_public_url` (Colab `proxyPort`)
+- `strata/ui.py`: แท็บ 5 "🎨 สร้างภาพ (ComfyUI)" — dropdown 2 โมเดล, ปุ่มติดตั้ง/เปิด/หยุด, สถานะ GB + ลิงก์;
+  ชื่อแท็บ 1 คำนวณจำนวนโมเดลจาก `len(ALL_PRESET_KEYS)` (เดิม hard-code 10)
+- เทสต์: `image model catalog` (ตรวจ repo/targets/subdir/นามสกุลไฟล์/ไม่ปนกับ MODEL_CATALOG),
+  `comfyui helpers` (คำสั่ง listen/port/lowvram, ตำแหน่ง symlink, ผูกไฟล์ซ้ำได้, สถานะ missing)
+  + ui_smoke ตรวจ 5 แท็บและปุ่มในแท็บ 5
+- เพิ่ม preset ข้อความ: `deepseek-v4-pro-4b-heretic` (Q5_K_M 3.16 GB + mmproj-Q8_0 0.37 GB ≈ 3.5 GB)
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

@@ -20,7 +20,8 @@ ModelOptionType = Literal[
     "qwen38-27b-rvn-heretic", "qwen38-27b-coletti", "muse-glimmer-30b-heretic",
     "minicpm-v47-35b", "lfm25-24b-a2b", "qwen35-9b-defiant-fable",
     "ornith-15-9b", "nemotron-35-bolt-74b",
-    "deepseek-v41-flash-abliterated", "qwen38-27b-turbo-fable", "custom",
+    "deepseek-v41-flash-abliterated", "qwen38-27b-turbo-fable",
+    "deepseek-v4-pro-4b-heretic", "custom",
 ]
 
 ALL_PRESET_KEYS: list[str] = [
@@ -28,7 +29,7 @@ ALL_PRESET_KEYS: list[str] = [
     "qwen38-27b-coletti", "muse-glimmer-30b-heretic", "minicpm-v47-35b",
     "lfm25-24b-a2b", "qwen35-9b-defiant-fable", "ornith-15-9b",
     "nemotron-35-bolt-74b", "deepseek-v41-flash-abliterated",
-    "qwen38-27b-turbo-fable",
+    "qwen38-27b-turbo-fable", "deepseek-v4-pro-4b-heretic",
 ]
 
 MODEL_OPTION: ModelOptionType = "none"
@@ -114,9 +115,55 @@ MODEL_CATALOG: dict[str, dict] = {
         "has_mtp": False,
         "desc": "🐋 DeepSeek-V4.1-Flash-1017 (abliterated, MoE, 5 shards ~225GB — A100/H100 เท่านั้น)",
     },
+    "deepseek-v4-pro-4b-heretic": {
+        "repo_id": "mradermacher/DeepSeek-V4-Pro-Qwen3.5-4B-UNCENSORED-heretic-GGUF",
+        "include": ["*heretic.Q5_K_M.gguf", "*mmproj-Q8_0.gguf"],
+        "exclude": ["*f16*"],
+        "approx_gb": 3.5,
+        "has_mtp": False,
+        "desc": "🐋 DeepSeek-V4-Pro-Qwen3.5-4B-heretic (Q5_K_M 3.2GB + mmproj) เร็วมากบน T4",
+    },
     "custom": {"repo_id": CUSTOM_HF_REPO, "include": None, "exclude": None, "approx_gb": 0.0, "has_mtp": False, "desc": "⚙️ กำหนด Repo เอง"},
 }
 
 LLAMA_LOG_FILE = Path(os.environ.get("STRATA_LOG_FILE", f"{STRATA_HOME}/llama_server.log"))
 
 DEFAULT_RAG_PATH = os.environ.get("STRATA_RAG_STORE", f"{STRATA_HOME}/rag_store.npz")
+
+# ---------------------------------------------------------------------------
+# โมเดล "สร้างภาพ" (image generation) — คนละเอนจินกับ llama.cpp
+# GGUF/safetensors ชุดนี้รันด้วย ComfyUI (+custom node ComfyUI-GGUF) ไม่ใช่ llama-server
+# ---------------------------------------------------------------------------
+IMAGE_DIR = Path(os.environ.get("STRATA_IMAGE_DIR", f"{STRATA_HOME}/image_models"))
+
+COMFY_DIR = Path(os.environ.get("STRATA_COMFY_DIR", f"{STRATA_HOME}/ComfyUI"))
+
+COMFY_PORT = int(os.environ.get("STRATA_COMFY_PORT", "8188"))
+
+# โฟลเดอร์ย่อยใน ComfyUI/models ที่เราจะ symlink ไฟล์เข้าไป
+COMFY_MODEL_SUBDIRS = ("diffusion_models", "text_encoders", "vae")
+
+IMAGE_CATALOG: dict[str, dict] = {
+    "qwen-image-21-uncensored": {
+        "repo_id": "sdadfas/Qwen-Image-2.1-Uncensored-GGUF",
+        # targets: ชื่อไฟล์ในเรพอ -> โฟลเดอร์ย่อยของ ComfyUI
+        "targets": {
+            "qwen-image-2.1-UC-Q4_K_M.gguf": "diffusion_models",
+            "text_encoders/qwen3vl_8b_int8_convrot.safetensors": "text_encoders",
+            "vae/qwen_image_2.1_vae_bf16.safetensors": "vae",
+        },
+        "approx_gb": 14.6,
+        "desc": "🎨 Qwen-Image-2.1 Uncensored (Q4_K_M 4.6GB + Qwen3VL-8B int8 9.4GB + VAE) ลง T4 ได้",
+    },
+    "flux-3-klein-uncensored": {
+        "repo_id": "AtomicChat/FLUX-3-Image-Klein-pup-Uncensored-GGUF",
+        "targets": {
+            "FLUX-3-Image-Klein-pup-Uncensored-AD-Q5_K_M.gguf": "diffusion_models",
+            "mmproj-FLUX-3-Image-Klein-pup-Uncensored-F16.gguf": "text_encoders",
+        },
+        "approx_gb": 7.5,
+        "desc": "⚡ FLUX-3-Image-Klein pup Uncensored (Q5_K_M 6.6GB + encoder) เร็วบน T4",
+    },
+}
+
+IMAGE_PRESET_KEYS: list[str] = list(IMAGE_CATALOG)
