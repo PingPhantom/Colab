@@ -19,11 +19,12 @@ from .config import (
     COMFY_DIR,
     COMFY_MODEL_SUBDIRS,
     COMFY_PORT,
-    IMAGE_CATALOG,
-    IMAGE_DIR,
+    IMAGE_PRESET_KEYS,
+    MODEL_CATALOG,
+    MODEL_DIR,
 )
 from .download import download_model_files
-from .utils import _dir_bytes, _fmt_bytes, run_stream
+from .utils import _dir_bytes, run_stream
 
 COMFY_REPO = "https://github.com/comfyanonymous/ComfyUI"
 GGUF_NODE_REPO = "https://github.com/city96/ComfyUI-GGUF"
@@ -36,9 +37,11 @@ _COMFY_PROC: subprocess.Popen | None = None
 # แคตตาล็อก / ไฟล์
 # ---------------------------------------------------------------------------
 def image_preset(key: str) -> dict:
-    if key not in IMAGE_CATALOG:
-        raise ValueError(f"ไม่รู้จักโมเดลภาพ '{key}' (มี: {', '.join(IMAGE_CATALOG)})")
-    return IMAGE_CATALOG[key]
+    """entry ของโมเดลภาพ (kind="image") — อยู่ใน MODEL_CATALOG เดียวกับโมเดลข้อความ"""
+    cfg = MODEL_CATALOG.get(key)
+    if cfg is None or cfg.get("kind") != "image":
+        raise ValueError(f"'{key}' ไม่ใช่โมเดลสร้างภาพ (มี: {', '.join(IMAGE_PRESET_KEYS)})")
+    return cfg
 
 
 def include_patterns(key: str) -> list[str]:
@@ -59,9 +62,9 @@ def comfy_target_path(key: str, rel: str, comfy_dir: str | Path = COMFY_DIR) -> 
 
 
 def image_model_status(key: str, model_dir: str | Path | None = None) -> dict:
-    """ดูว่าโหลดครบหรือยัง (ไม่แตะ network)"""
+    """ดูว่าโหลดครบหรือยัง (ไม่แตะ network) — model_dir คือโฟลเดอร์รากที่มี <key>/ อยู่ข้างใน"""
     cfg = image_preset(key)
-    base = Path(model_dir) if model_dir else IMAGE_DIR / key
+    base = Path(model_dir or MODEL_DIR) / key
     missing = [rel for rel in cfg["targets"] if not (base / rel).is_file()]
     gb = _dir_bytes(base) / (1024**3) if base.is_dir() else 0.0
     return {
@@ -80,7 +83,7 @@ def image_model_status(key: str, model_dir: str | Path | None = None) -> dict:
 def link_image_model(key: str, model_dir: str | Path | None = None, comfy_dir: str | Path = COMFY_DIR) -> dict[str, str]:
     """symlink ไฟล์โมเดลเข้าโฟลเดอร์ที่ ComfyUI มองเห็น (ทำซ้ำได้ ไม่พัง)"""
     cfg = image_preset(key)
-    base = Path(model_dir) if model_dir else IMAGE_DIR / key
+    base = (Path(model_dir or MODEL_DIR) / key)
     linked: dict[str, str] = {}
     for rel in cfg["targets"]:
         src = (base / rel).resolve()
@@ -98,17 +101,17 @@ def link_image_model(key: str, model_dir: str | Path | None = None, comfy_dir: s
     return linked
 
 
-def install_image_model(key: str, model_dir: str | Path | None = None, force: bool = False) -> dict:
-    """ดาวน์โหลดไฟล์ของโมเดลภาพ แล้ว symlink เข้า ComfyUI/models"""
+def install_image_model(key: str, model_dir: str | Path | None = None, force: bool = False, **_: object) -> dict:
+    """ดาวน์โหลดไฟล์ของโมเดลภาพลง <model_dir>/<key> (เหมือนโมเดลอื่น) แล้ว symlink เข้า ComfyUI/models"""
     cfg = image_preset(key)
-    base = Path(model_dir) if model_dir else IMAGE_DIR / key
+    base = Path(model_dir or MODEL_DIR) / key
     base.mkdir(parents=True, exist_ok=True)
     rprint(f"[bold magenta]🎨 โมเดลสร้างภาพ:[/bold magenta] [cyan]{key}[/cyan] -> {cfg['repo_id']}")
     res = download_model_files(
         include=include_patterns(key), exclude=None, model_dir=str(base), repo_id=cfg["repo_id"], force=force
     )
-    linked = link_image_model(key, base)
-    st = image_model_status(key, base)
+    linked = link_image_model(key, base.parent)
+    st = image_model_status(key, base.parent)
     if st["missing"]:
         raise FileNotFoundError(f"ยังขาดไฟล์: {', '.join(st['missing'])} (ลองดาวน์โหลดใหม่หรือตรวจชื่อไฟล์ในเรพอ)")
     rprint(f"[bold green]✅ พร้อมสร้างภาพ[/bold green] ({st['gb']:.2f} GB • ผูกเข้า ComfyUI {len(linked)} ไฟล์)")
@@ -244,6 +247,6 @@ __all__ = [
 ]
 
 if __name__ == "__main__":  # pragma: no cover - CLI เร็ว ๆ
-    for k in IMAGE_CATALOG:
+    for k in IMAGE_PRESET_KEYS:
         st = image_model_status(k)
-        print(f"{k}: {st['gb']}/{st['approx_gb']} GB • ครบ={st['downloaded']} • {_fmt_bytes(_dir_bytes(Path(st['dir'])) if Path(st['dir']).is_dir() else 0)}")
+        print(f"{k}: {st['gb']}/{st['approx_gb']} GB • ครบ={st['downloaded']}")

@@ -1122,23 +1122,35 @@ def test_catalog_download_patterns() -> None:
 
 
 def test_image_catalog() -> None:
-    """แคตตาล็อกโมเดลสร้างภาพ: ชื่อไฟล์/โฟลเดอร์ปลายทางต้องถูก และต้องไม่ปนกับโมเดลข้อความ"""
-    from strata.config import COMFY_MODEL_SUBDIRS, IMAGE_CATALOG, IMAGE_PRESET_KEYS, MODEL_CATALOG
-
-    assert list(IMAGE_CATALOG) == IMAGE_PRESET_KEYS and IMAGE_PRESET_KEYS, "ต้องมีโมเดลภาพอย่างน้อย 1 ตัว"
-    assert not (set(IMAGE_PRESET_KEYS) & set(MODEL_CATALOG)), "key โมเดลภาพต้องไม่ทับกับโมเดลข้อความ"
-    assert not any("image" in str(c["repo_id"]).lower() for c in MODEL_CATALOG.values()), (
-        "repo โมเดลสร้างภาพต้องไม่อยู่ใน MODEL_CATALOG (llama.cpp รันไม่ได้)"
+    """โมเดลสร้างภาพอยู่ใน MODEL_CATALOG เดียวกัน (kind="image") — ไม่แยกแคตตาล็อก"""
+    from strata.config import (
+        ALL_PRESET_KEYS,
+        COMFY_MODEL_SUBDIRS,
+        IMAGE_PRESET_KEYS,
+        MODEL_CATALOG,
+        TEXT_PRESET_KEYS,
     )
-    for key, cfg in IMAGE_CATALOG.items():
+
+    assert IMAGE_PRESET_KEYS, "ต้องมีโมเดลสร้างภาพอย่างน้อย 1 ตัว"
+    assert set(IMAGE_PRESET_KEYS) <= set(ALL_PRESET_KEYS), "โมเดลภาพต้องอยู่ใน ALL_PRESET_KEYS/lิสต์เดียวกับโมเดลอื่น"
+    assert set(TEXT_PRESET_KEYS) | set(IMAGE_PRESET_KEYS) == set(ALL_PRESET_KEYS)
+    assert not (set(TEXT_PRESET_KEYS) & set(IMAGE_PRESET_KEYS))
+    for key in IMAGE_PRESET_KEYS:
+        cfg = MODEL_CATALOG[key]
+        assert cfg["kind"] == "image", f"{key}: kind ต้องเป็น image"
         assert re.fullmatch(r"[\w.\-]+/[\w.\-]+", cfg["repo_id"]), f"{key}: repo_id ผิดรูป"
         targets = cfg["targets"]
         assert targets, f"{key}: ต้องระบุไฟล์"
+        assert set(targets) == set(cfg["include"]), f"{key}: include ต้องตรงกับ targets"
         assert all(sub in COMFY_MODEL_SUBDIRS for sub in targets.values()), f"{key}: โฟลเดอร์ปลายทางไม่รองรับ"
         assert all(str(f).endswith((".gguf", ".safetensors")) for f in targets), f"{key}: นามสกุลไฟล์ผิด"
         assert "diffusion_models" in targets.values(), f"{key}: ต้องมี diffusion model"
         assert isinstance(cfg["approx_gb"], (int, float)) and cfg["approx_gb"] > 0, f"{key}: approx_gb ผิด"
         assert isinstance(cfg["desc"], str) and cfg["desc"], f"{key}: ต้องมี desc"
+    for key in TEXT_PRESET_KEYS:
+        cfg = MODEL_CATALOG[key]
+        assert cfg.get("kind", "text") == "text", f"{key}: โมเดลข้อความไม่ต้องมี kind=image"
+        assert "targets" not in cfg, f"{key}: โมเดลข้อความไม่ต้องมี targets"
 
 
 def test_imagegen_helpers() -> None:
@@ -1170,21 +1182,35 @@ def test_imagegen_helpers() -> None:
     assert st["downloaded"] is False and len(st["missing"]) == 2, st
 
     with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp) / "models_src" / "flux-3-klein-uncensored"
-        src_dir = base / "nested"
-        src_dir.mkdir(parents=True)
+        base = Path(tmp) / "flux-3-klein-uncensored"
+        base.mkdir(parents=True)
         for rel in ig.include_patterns("flux-3-klein-uncensored"):
             (base / rel).parent.mkdir(parents=True, exist_ok=True)
             (base / rel).write_bytes(b"GGUF")
         comfy = Path(tmp) / "ComfyUI"
-        linked = ig.link_image_model("flux-3-klein-uncensored", base, comfy_dir=comfy)
+        linked = ig.link_image_model("flux-3-klein-uncensored", tmp, comfy_dir=comfy)
         assert len(linked) == 2, f"ต้องผูกครบ 2 ไฟล์: {linked}"
         for p in linked.values():
             assert Path(p).is_symlink() and Path(p).exists()
-        again = ig.link_image_model("flux-3-klein-uncensored", base, comfy_dir=comfy)
+        again = ig.link_image_model("flux-3-klein-uncensored", tmp, comfy_dir=comfy)
         assert len(again) == 2, "ผูกซ้ำต้องไม่พัง"
-        st2 = ig.image_model_status("flux-3-klein-uncensored", base)
+        st2 = ig.image_model_status("flux-3-klein-uncensored", tmp)
         assert st2["downloaded"] is True and st2["gb"] >= 0
+
+    # โมเดลภาพต้องไม่ถูก llama-server รับ (ข้อความ error ต้องบอกทางออก)
+    from strata.server import switch_strata_model
+
+    raised = ""
+    try:
+        switch_strata_model("flux-3-klein-uncensored", model_dir="/tmp/x")
+    except ValueError as e:
+        raised = str(e)
+    assert "สร้างภาพ" in raised and "llama-server" in raised, f"error ต้องบอกชัดเจน: {raised!r}"
+
+    # download layer ต้องส่งต่อไป imagegen
+    from strata.download import install_model
+
+    assert callable(install_model)
 
 
 def main() -> int:

@@ -1,4 +1,4 @@
-"""Studio UI (ipywidgets) 5 แท็บ: โมเดล&ดิสก์, แชท+RAG, คลัง PDF, เปรียบเทียบโมเดล."""
+"""Studio UI (ipywidgets) 4 แท็บ: โมเดล&ดิสก์, แชท+RAG, คลัง PDF, เปรียบเทียบโมเดล."""
 from __future__ import annotations
 
 import glob
@@ -21,8 +21,6 @@ from .config import (
     DEFAULT_RAG_PATH,
     DRAFT_CATALOG,
     DRAFT_DIR,
-    IMAGE_CATALOG,
-    IMAGE_PRESET_KEYS,
     LLAMA_LOG_FILE,
     MODEL_CATALOG,
     MODEL_DIR,
@@ -38,12 +36,10 @@ from .download import (
     remove_model,
 )
 from .imagegen import (
-    comfyui_status,
     ensure_comfyui,
-    image_model_status,
     install_image_model,
+    link_image_model,
     start_comfyui,
-    stop_comfyui,
 )
 from .rag import GLOBAL_RAG, StrataRAG
 from .server import (
@@ -320,17 +316,30 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
 
     rows: dict[str, dict] = {}
 
+    def _open_image_studio(opt: str) -> None:
+        """โมเดลภาพ (kind=image): ผูกไฟล์เข้า ComfyUI แล้วเปิดหน้าเว็บสร้างภาพ"""
+        ensure_comfyui()
+        linked = link_image_model(opt, model_dir=model_dir)
+        rprint(f"[dim]🔗 ผูกไฟล์เข้า ComfyUI {len(linked)} ไฟล์[/dim]")
+        rprint(f"[bold green]🎨 เปิด ComfyUI:[/bold green] {start_comfyui(port=COMFY_PORT)}")
+
     def _row_widgets(k: str) -> dict:
+        is_img = MODEL_CATALOG[k].get("kind") == "image"
         w = {
             "info": widgets.HTML(layout=_L(flex="1 1 250px")),
             "bd": _B("📥 โหลด", "primary", "95px"),
-            "br": _B("🚀 รัน & แชท", "success", "110px"),
+            "br": _B("🎨 สร้างภาพ" if is_img else "🚀 รัน & แชท", "success", "115px"),
             "bk": _B("📌 เก็บตัวเดียว", "", "105px"),
             "bx": _B("🗑️ ลบ", "danger", "70px"),
             "installed": False,
+            "kind": "image" if is_img else "text",
         }
-        w["bd"].on_click(lambda _, opt=k: _act(install_model, opt, model_dir=model_dir, port=port))
-        w["br"].on_click(lambda _, opt=k: _act(switch_strata_model if rows[opt]["installed"] else install_model, opt, model_dir=model_dir, port=port, active=opt, tab=1, **({} if rows[opt]["installed"] else {"auto_start_server": True})))
+        if is_img:
+            w["bd"].on_click(lambda _, opt=k: _act(install_image_model, opt, model_dir=model_dir))
+            w["br"].on_click(lambda _, opt=k: _act(_open_image_studio, opt))
+        else:
+            w["bd"].on_click(lambda _, opt=k: _act(install_model, opt, model_dir=model_dir, port=port))
+            w["br"].on_click(lambda _, opt=k: _act(switch_strata_model if rows[opt]["installed"] else install_model, opt, model_dir=model_dir, port=port, active=opt, tab=1, **({} if rows[opt]["installed"] else {"auto_start_server": True})))
         w["bk"].on_click(lambda _, opt=k: _act(keep_only_models, opt, model_dir=model_dir))
         w["bx"].on_click(lambda _, opt=k: _act(remove_model, opt, model_dir=model_dir))
         return w
@@ -372,12 +381,16 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
             gc, sz = int(stats["gguf"]), int(stats["bytes"])
             w["installed"] = gc > 0
             mtag = " <span style='background:#3b0764;color:#e9d5ff;padding:1px 6px;border-radius:6px;font-size:10px;'>🚀 MTP</span>" if cfg.get("has_mtp") else ""
+            if cfg.get("kind") == "image":
+                mtag += " <span style='background:#0c4a6e;color:#7dd3fc;padding:1px 6px;border-radius:6px;font-size:10px;'>🎨 IMAGE</span>"
             bdg = f"<span style='color:#4ade80;font-size:11px;'>✅ ติดตั้งแล้ว ({_fmt_bytes(sz)})</span>" if gc else f"<span style='color:#94a3b8;font-size:11px;'>⬜ ยังไม่โหลด (~{cfg['approx_gb']}GB)</span>"
             w["info"].value = f"<div style='font-family:sans-serif;'><b style='color:#38bdf8;'>{k}</b>{mtag} {bdg}<div style='font-size:11px;color:#cbd5e1;'>{cfg['desc']} (<code>{cfg['repo_id']}</code>)</div></div>"
             w["bd"].description = "📥 โหลดซ้ำ" if gc else "📥 โหลด"
             w["bd"].button_style = "" if gc else "primary"
             w["bk"].disabled = not (ex and cnt_dirs > 1)
             w["bx"].disabled = not ex
+            if w.get("kind") == "image":  # ต้องมีไฟล์ก่อนถึงจะเปิด ComfyUI ได้
+                w["br"].disabled = not gc
 
     spec_bar = widgets.VBox([
         widgets.HBox([spec_tb, dmax_sl, chk_kvq8, b_apply_spec], layout=_L(flex_flow="row wrap", align_items="center", gap="6px")),
@@ -570,81 +583,12 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
     b_arena.on_click(_run_arena)
     tab4 = widgets.VBox([widgets.HBox(list(a_chks.values()), layout=_L(flex_flow="row wrap", gap="6px")), widgets.HBox([a_rag, a_dl, a_temp_sl, a_max_sl], layout=_L(gap="12px", flex_flow="row wrap")), widgets.HBox([a_in, b_arena], layout=_L(gap="6px")), a_stat, a_box])
 
-    # --- TAB 5: สร้างภาพ (ComfyUI + GGUF) ---
-    im_dd = widgets.Dropdown(
-        options=[(f"{k} — {IMAGE_CATALOG[k]['desc']}", k) for k in IMAGE_PRESET_KEYS],
-        layout=_L(width="100%"),
-    )
-    b_im_install = _B("🎨 ติดตั้งโมเดลภาพ", "primary", "165px")
-    b_im_start = _B("▶️ เปิด ComfyUI", "success", "150px")
-    b_im_stop = _B("⏹ หยุด ComfyUI", "danger", "145px")
-    im_stat = widgets.HTML()
-    im_out = widgets.Output(layout={"border": "1px solid #334155", "max_height": "240px", "overflow": "auto"})
-
-    def _im_refresh() -> None:
-        key = im_dd.value
-        st = image_model_status(key)
-        cs = comfyui_status(port=COMFY_PORT)
-        cfg = IMAGE_CATALOG[key]
-        tone = "#4ade80" if st["downloaded"] else "#94a3b8"
-        comfy_tone = "#4ade80" if cs["online"] else "#94a3b8"
-        link = (
-            f"<div><a href='{cs['url']}' target='_blank' style='color:#38bdf8;'>🔗 เปิดหน้า ComfyUI</a></div>"
-            if cs["url"]
-            else "<div style='color:#94a3b8;font-size:11px;'>ยังไม่เปิด ComfyUI — กด ▶️ เปิด ComfyUI</div>"
-        )
-        im_stat.value = (
-            "<div style='font-family:sans-serif;font-size:12px;line-height:1.7;'>"
-            f"<b style='color:{tone};'>{'✅ โมเดลครบ' if st['downloaded'] else '⬜ ยังไม่โหลด'}</b> "
-            f"({st['gb']}/{cfg['approx_gb']} GB)<br>"
-            f"<span style='color:{comfy_tone};'>🎨 ComfyUI: {'ออนไลน์' if cs['online'] else 'ออฟไลน์'}</span>"
-            f" • ติดตั้งแล้ว={cs['installed']} • พอร์ต {COMFY_PORT}<br>{link}</div>"
-        )
-
-    def _on_im_install(_):
-        key = im_dd.value
-        _act(lambda: install_image_model(key))
-        _im_refresh()
-
-    def _on_im_start(_):
-        def _job():
-            ensure_comfyui()
-            start_comfyui(port=COMFY_PORT)
-            _im_refresh()
-
-        _act(_job)
-        _im_refresh()
-
-    def _on_im_stop(_):
-        _act(stop_comfyui)
-        _im_refresh()
-
-    b_im_install.on_click(_on_im_install)
-    b_im_start.on_click(_on_im_start)
-    b_im_stop.on_click(_on_im_stop)
-    im_dd.observe(lambda _chg: _im_refresh(), names="value")
-    _im_refresh()
-
-    tab5 = widgets.VBox([
-        widgets.HTML(
-            "<div style='font-size:12px;color:#cbd5e1;line-height:1.6;'>"
-            "🎨 <b>สร้างภาพ</b> ใช้ <b>ComfyUI + ComfyUI-GGUF</b> (คนละเอนจินกับ llama.cpp) — "
-            "โมเดลข้อความ GGUF <b>สร้างภาพไม่ได้</b> ปุ่มนี้จะโหลดโมเดลภาพ, ผูกเข้า ComfyUI และเปิดหน้าเว็บให้ "
-            "(T4 แนะนำโหมด lowvram ที่ตั้งไว้ให้แล้ว)</div>"
-        ),
-        im_dd,
-        widgets.HBox([b_im_install, b_im_start, b_im_stop], layout=_L(flex_flow="row wrap", gap="6px")),
-        im_stat,
-        im_out,
-    ])
-
-    tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4, tab5])
+    tabs = widgets.Tab(children=[tab1, tab2, tab3, tab4])
     for idx, ttl in enumerate([
         f"📦 1. โมเดล & ดิสก์ ({len(ALL_PRESET_KEYS)} ตัว)",
         "💬 2. แชท + RAG",
         "📚 3. คลัง PDF RAG",
         "⚔️ 4. เปรียบเทียบโมเดล",
-        "🎨 5. สร้างภาพ (ComfyUI)",
     ]):
         tabs.set_title(idx, ttl)
     live_ref = None

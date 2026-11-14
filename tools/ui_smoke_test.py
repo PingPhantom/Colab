@@ -129,15 +129,26 @@ def main() -> int:
 
             def check_structure():
                 tabs = [w for w in all_w if isinstance(w, widgets.Tab)]
-                assert tabs and len(tabs[0].children) == 5, "ต้องมี 5 แท็บ"
-                titles = [tabs[0].get_title(i) for i in range(5)]
+                assert tabs and len(tabs[0].children) == 4, "ต้องมี 4 แท็บ (โมเดลภาพอยู่ในแท็บ 1)"
+                titles = [tabs[0].get_title(i) for i in range(4)]
                 assert any("แชท" in t for t in titles), f"ชื่อแท็บผิดปกติ: {titles}"
-                assert any("สร้างภาพ" in t for t in titles), f"ไม่พบแท็บสร้างภาพ: {titles}"
                 btns = [w for w in all_w if isinstance(w, widgets.Button)]
-                n_models = len(strata_ui.ALL_PRESET_KEYS)
-                for label in ("📥 โหลด", "🚀 รัน & แชท", "📌 เก็บตัวเดียว", "🗑️ ลบ"):
-                    assert sum(b.description == label for b in btns) == n_models, f"ปุ่ม '{label}' ต้องมี {n_models} ปุ่ม"
-                for desc in ("💾 บันทึกคลัง", "📂 โหลดคลังเดิม", "🎨 ติดตั้งโมเดลภาพ", "▶️ เปิด ComfyUI", "⏹ หยุด ComfyUI"):
+                from strata.config import IMAGE_PRESET_KEYS, TEXT_PRESET_KEYS
+
+                n_models, n_text, n_img = (
+                    len(strata_ui.ALL_PRESET_KEYS),
+                    len(TEXT_PRESET_KEYS),
+                    len(IMAGE_PRESET_KEYS),
+                )
+                for label, want in (
+                    ("📥 โหลด", n_models),
+                    ("🚀 รัน & แชท", n_text),
+                    ("🎨 สร้างภาพ", n_img),
+                    ("📌 เก็บตัวเดียว", n_models),
+                    ("🗑️ ลบ", n_models),
+                ):
+                    assert sum(b.description == label for b in btns) == want, f"ปุ่ม '{label}' ต้องมี {want} ปุ่ม"
+                for desc in ("💾 บันทึกคลัง", "📂 โหลดคลังเดิม"):
                     assert any(b.description == desc for b in btns), f"ไม่พบปุ่ม {desc}"
 
             check("จำนวน/widget ในแต่ละแท็บ", check_structure)

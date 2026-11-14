@@ -142,6 +142,10 @@ def install_model(option: ModelOptionType = "qwen38-27b-cyber", model_dir: str =
     if option not in MODEL_CATALOG:
         raise ValueError(f"เลือกโมเดลจาก: {[*MODEL_CATALOG.keys(), 'all']}")
     cfg = MODEL_CATALOG[option]; sub = str(Path(model_dir) / option)
+    if cfg.get("kind") == "image":  # โมเดลสร้างภาพ: ดาวน์โหลดเหมือนกัน แต่ผูกเข้า ComfyUI ด้วย
+        from .imagegen import install_image_model
+
+        return install_image_model(option, model_dir=model_dir, force=force)
     rprint(f"[bold magenta]📦 เตรียมโมเดล:[/bold magenta] [cyan]{option}[/cyan] -> {repo_id or cfg['repo_id']}")
     download_model_files(include=include if include is not None else cfg["include"], exclude=exclude if exclude is not None else cfg["exclude"], model_dir=sub, repo_id=repo_id or cfg["repo_id"], force=force)
     if auto_start_server:

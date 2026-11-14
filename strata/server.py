@@ -653,6 +653,11 @@ def start_strata_server(model_dir: str | None = MODEL_DIR, port: int = DEFAULT_P
 def switch_strata_model(option: str, model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT) -> OpenAI:
     if option not in MODEL_CATALOG:
         raise ValueError(f"เลือกโมเดลจาก: {ALL_PRESET_KEYS}")
+    if MODEL_CATALOG[option].get("kind") == "image":
+        raise ValueError(
+            f"'{option}' เป็นโมเดลสร้างภาพ (ไม่ใช่ text model) — llama-server รันไม่ได้ "
+            "ให้ใช้แท็บ 1 ปุ่ม '🎨 สร้างภาพ' (ComfyUI) แทน"
+        )
     return start_strata_server(model_dir=str(Path(model_dir) / option), port=port, restart=True)
 
 # ---------------------------------------------------------------------------

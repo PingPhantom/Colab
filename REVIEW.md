@@ -329,12 +329,14 @@ repo มี 3 ตระกูลไฟล์ชื่อคล้ายกัน
 
 ---
 
-## 🎨 imagegen: สร้างภาพด้วย ComfyUI + GGUF (แท็บ 5)
+## 🎨 imagegen: สร้างภาพด้วย ComfyUI + GGUF (แถวเดียวในแท็บ 1)
 
 โจทย์: ผู้ใช้อยาก "สร้างภาพ" จากโมเดล GGUF — ซึ่งเป็นไปไม่ได้ใน llama.cpp (`mmproj` = vision *input*)
-จึงแยกเส้นทางใหม่ทั้งชุด ไม่ปนกับ `MODEL_CATALOG` (llama-server จะพังถ้าไปเจอ diffusion gguf)
+**ผู้ใช้ยืนยันว่าไม่ต้องการแยกแคตตาล็อก/แท็บ** จึงรวมเข้า `MODEL_CATALOG` เดียวกันด้วย `kind="image"`
+(แถวเดียว ลิสต์เดียว ปุ่มโหลดเหมือนกัน) แต่ตอนรันจะแยกไป ComfyUI เพราะ llama-server รัน diffusion gguf ไม่ได้
 
-- `strata/config.py`: `IMAGE_CATALOG` + `IMAGE_PRESET_KEYS` + `IMAGE_DIR`, `COMFY_DIR`, `COMFY_PORT=8188`,
+- `strata/config.py`: 2 entry `kind="image"` ใน `MODEL_CATALOG` (มี `include` = `targets` = ชื่อไฟล์จริง),
+  `IMAGE_PRESET_KEYS`/`TEXT_PRESET_KEYS` (คำนวณจาก kind), `COMFY_DIR`, `COMFY_PORT=8188`,
   `COMFY_MODEL_SUBDIRS` — แต่ละ entry มี `targets` = {ไฟล์ในเรพโอ: โฟลเดอร์ย่อยของ ComfyUI}
   - `qwen-image-21-uncensored` (sdadfas/Qwen-Image-2.1-Uncensored-GGUF): Q4_K_M 4.60 GB +
     `text_encoders/qwen3vl_8b_int8_convrot.safetensors` 9.35 GB + `vae/qwen_image_2.1_vae_bf16.safetensors` 0.68 GB ≈ 14.6 GB
@@ -345,9 +347,12 @@ repo มี 3 ตระกูลไฟล์ชื่อคล้ายกัน
   (ใช้ `download_model_files` เดิม → ตรวจดิสก์/รายงาน GB), `ensure_comfyui` (clone ComfyUI + ComfyUI-GGUF,
   pip install requirements + gguf), `comfyui_command` (listen 0.0.0.0 : 8188, `--lowvram`),
   `start_comfyui`/`stop_comfyui`/`comfyui_status`, `comfyui_public_url` (Colab `proxyPort`)
-- `strata/ui.py`: แท็บ 5 "🎨 สร้างภาพ (ComfyUI)" — dropdown 2 โมเดล, ปุ่มติดตั้ง/เปิด/หยุด, สถานะ GB + ลิงก์;
-  ชื่อแท็บ 1 คำนวณจำนวนโมเดลจาก `len(ALL_PRESET_KEYS)` (เดิม hard-code 10)
-- เทสต์: `image model catalog` (ตรวจ repo/targets/subdir/นามสกุลไฟล์/ไม่ปนกับ MODEL_CATALOG),
+- `strata/ui.py`: ยังมี **4 แท็บเท่าเดิม** — แถวโมเดลภาพในแท็บ 1 ได้ป้าย `🎨 IMAGE`,
+  ปุ่ม `🎨 สร้างภาพ` (แทน `🚀 รัน & แชท`, disable จนกว่าจะโหลดเสร็จ) → `ensure_comfyui()` + `link_image_model()` + `start_comfyui()`;
+  ชื่อแท็บ 1 คำนวณจำนวนจาก `len(ALL_PRESET_KEYS)`
+- `strata/download.py`/`server.py`: `install_model()` ส่งต่อไป `install_image_model()` เมื่อ `kind=image`,
+  `switch_strata_model()` ปฏิเสธพร้อมบอกให้กดปุ่ม `🎨 สร้างภาพ`
+- เทสต์: `image model catalog` (kind/targets/include/subdir/แยก text-image ด้วย `TEXT_PRESET_KEYS`),
   `comfyui helpers` (คำสั่ง listen/port/lowvram, ตำแหน่ง symlink, ผูกไฟล์ซ้ำได้, สถานะ missing)
   + ui_smoke ตรวจ 5 แท็บและปุ่มในแท็บ 5
 - เพิ่ม preset ข้อความ: `deepseek-v4-pro-4b-heretic` (Q5_K_M 3.16 GB + mmproj-Q8_0 0.37 GB ≈ 3.5 GB)
