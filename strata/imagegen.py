@@ -276,6 +276,115 @@ def ensure_comfyui(pull: bool = True, comfy_dir: str | Path = COMFY_DIR) -> Path
     return root
 
 
+CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+
+_TUNNEL_PROC: subprocess.Popen | None = None
+
+_TUNNEL_LOG_PATH: Path | None = None
+
+
+def comfyui_log_path(comfy_dir: str | Path = COMFY_DIR) -> Path:
+    return Path(comfy_dir) / "comfyui.log"
+
+
+def parse_comfy_port(log_text: str, fallback: int = COMFY_PORT) -> int:
+    """ComfyUI จะขยับพอร์ตเองถ้า 8188 ไม่ว่าง — อ่านพอร์ตจริงจาก log"""
+    import re as _re
+
+    hits = _re.findall(r"To see the GUI go to: http://[^:]+:(\d+)", log_text)
+    if not hits:
+        hits = _re.findall(r"http://(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]):(\d+)", log_text)
+    return int(hits[-1]) if hits else fallback
+
+
+def parse_cloudflared_url(text: str) -> str:
+    import re as _re
+
+    hits = _re.findall(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com", text)
+    return hits[-1] if hits else ""
+
+
+def public_url_works(url: str, timeout: float = 12.0) -> bool:
+    """เช็กว่า URL ที่จะให้ผู้ใช้เปิด ตอบ HTTP จริง (Colab proxy บางครั้ง 404)"""
+    if not url:
+        return False
+    req = urllib.request.Request(url, headers={"User-Agent": "strata-studio"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return 200 <= int(r.status) < 400
+    except Exception:  # noqa: BLE001 - ใช้ตัดสินว่าจะ fallback tunnel
+        return False
+
+
+def ensure_cloudflared(bin_dir: str | Path | None = None) -> Path:
+    """ดาวน์โหลด cloudflared (static binary) มาใช้เปิด quick tunnel แทน Colab proxy"""
+    target = Path(bin_dir or Path(MODEL_DIR).parent / "bin") / "cloudflared"
+    if target.is_file() and os.access(target, os.X_OK):
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    rprint("[dim]⬇️ ดาวน์โหลด cloudflared (~38 MB) สำหรับ tunnel สำรอง...[/dim]")
+    tmp = target.with_suffix(".part")
+    with urllib.request.urlopen(CLOUDFLARED_URL, timeout=180) as r, tmp.open("wb") as f:
+        shutil.copyfileobj(r, f)
+    tmp.chmod(0o755)
+    tmp.replace(target)
+    return target
+
+
+def start_tunnel(port: int = COMFY_PORT, bin_dir: str | Path | None = None, wait_s: int = 60) -> str:
+    """เปิด quick tunnel (trycloudflare.com) ชี้มาที่พอร์ตในเครื่อง แล้วคืน URL"""
+    global _TUNNEL_PROC, _TUNNEL_LOG_PATH
+    if _TUNNEL_PROC is not None and _TUNNEL_PROC.poll() is None and _TUNNEL_LOG_PATH and _TUNNEL_LOG_PATH.is_file():
+        url = parse_cloudflared_url(_TUNNEL_LOG_PATH.read_text(encoding="utf-8", errors="ignore"))
+        if url:
+            return url
+    binary = ensure_cloudflared(bin_dir)
+    _TUNNEL_LOG_PATH = Path(binary).parent / "tunnel.log"
+    _TUNNEL_LOG_PATH.write_text("", encoding="utf-8")
+    _TUNNEL_PROC = subprocess.Popen(
+        [str(binary), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{int(port)}"],
+        stdout=_TUNNEL_LOG_PATH.open("a", encoding="utf-8"),
+        stderr=subprocess.STDOUT,
+    )
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        text = _TUNNEL_LOG_PATH.read_text(encoding="utf-8", errors="ignore")
+        url = parse_cloudflared_url(text)
+        if url and public_url_works(url):
+            return url
+        if _TUNNEL_PROC.poll() is not None:
+            raise RuntimeError("cloudflared ออกก่อนได้ URL:\n" + "\n".join(text.splitlines()[-6:]))
+        time.sleep(2)
+    raise TimeoutError("cloudflared ไม่ได้ URL ภายในเวลาที่รอ — ดู " + str(_TUNNEL_LOG_PATH))
+
+
+def stop_tunnel() -> bool:
+    global _TUNNEL_PROC
+    if _TUNNEL_PROC is not None and _TUNNEL_PROC.poll() is None:
+        _TUNNEL_PROC.terminate()
+        with contextlib.suppress(Exception):
+            _TUNNEL_PROC.wait(timeout=10)
+        _TUNNEL_PROC = None
+        rprint("[bold yellow]⏹ ปิด tunnel แล้ว[/bold yellow]")
+        return True
+    _TUNNEL_PROC = None
+    return False
+
+
+def ensure_public_url(port: int, prefer: str = "auto") -> tuple[str, str]:
+    """คืน (url, ช่องทาง) — ลอง Colab proxy ก่อน แล้วค่อย fallback cloudflared"""
+    if prefer in ("auto", "colab"):
+        url = comfyui_public_url(port)
+        if public_url_works(url, timeout=8):
+            return url, "colab"
+        if url.startswith("http://127.0.0.1"):
+            return url, "local"  # ไม่ได้อยู่ใน Colab — ใช้ localhost ตรง ๆ
+        rprint(f"[yellow]⚠️ ลิงก์ Colab proxy ตอบ 404 ({url}) — ลองเปิด tunnel สำรองให้[/yellow]")
+    if prefer in ("auto", "tunnel"):
+        return start_tunnel(port), "cloudflared"
+    raise RuntimeError("เปิด public URL ไม่สำเร็จ")
+
+
 def comfyui_online(port: int = COMFY_PORT) -> bool:
     import urllib.error
     import urllib.request
@@ -297,36 +406,61 @@ def comfyui_public_url(port: int = COMFY_PORT) -> str:
         return f"http://127.0.0.1:{port}"
 
 
-def start_comfyui(port: int = COMFY_PORT, lowvram: bool = True, wait_s: int = 180, comfy_dir: str | Path = COMFY_DIR) -> str:
-    """สตาร์ท ComfyUI (ถ้ายังไม่รัน) แล้วคืน URL สำหรับเปิดในเบราว์เซอร์"""
+def start_comfyui(
+    port: int = COMFY_PORT,
+    lowvram: bool = True,
+    wait_s: int = 180,
+    comfy_dir: str | Path = COMFY_DIR,
+    public: str = "auto",
+) -> str:
+    """สตาร์ท ComfyUI (ถ้ายังไม่รัน) แล้วคืน URL ที่ *ใช้งานได้จริง* สำหรับเปิดในเบราว์เซอร์
+
+    `public="auto"` = ลอง Colab proxy ก่อน ถ้า 404 จะเปิด cloudflared quick tunnel ให้แทน
+    """
     global _COMFY_PROC
-    if comfyui_online(port):
-        url = comfyui_public_url(port)
-        rprint(f"[bold green]ℹ️ ComfyUI รันอยู่แล้ว:[/bold green] {url}")
-        return url
     root = Path(comfy_dir)
-    if not (root / "main.py").is_file():
-        raise FileNotFoundError(f"ยังไม่มี ComfyUI ที่ {root} — เรียก ensure_comfyui() ก่อน")
-    global _COMFY_LOG
-    log = root / "comfyui.log"
-    _COMFY_LOG = log.open("w", encoding="utf-8")
-    _COMFY_PROC = subprocess.Popen(
-        comfyui_command(port, lowvram=lowvram, comfy_dir=root),
-        cwd=str(root),
-        stdout=_COMFY_LOG,
-        stderr=subprocess.STDOUT,
-    )
-    deadline = time.time() + wait_s
-    while time.time() < deadline:
-        if comfyui_online(port):
-            url = comfyui_public_url(port)
-            rprint(f"[bold green]🎨 ComfyUI พร้อมสร้างภาพ:[/bold green] {url}")
-            return url
-        if _COMFY_PROC.poll() is not None:
-            tail = log.read_text(encoding="utf-8", errors="ignore").splitlines()[-8:] if log.is_file() else []
-            raise RuntimeError("ComfyUI ออกก่อนพร้อมใช้งาน:\n" + "\n".join(tail))
-        time.sleep(2)
-    raise TimeoutError(f"ComfyUI ไม่ขึ้นภายใน {wait_s}s — ดู log ที่ {log}")
+    actual = port
+    if not comfyui_online(port):
+        if not (root / "main.py").is_file():
+            raise FileNotFoundError(f"ยังไม่มี ComfyUI ที่ {root} — เรียก ensure_comfyui() ก่อน")
+        log = comfyui_log_path(root)
+        global _COMFY_LOG
+        _COMFY_LOG = log.open("w", encoding="utf-8")
+        _COMFY_PROC = subprocess.Popen(
+            comfyui_command(port, lowvram=lowvram, comfy_dir=root),
+            cwd=str(root),
+            stdout=_COMFY_LOG,
+            stderr=subprocess.STDOUT,
+        )
+        deadline = time.time() + wait_s
+        while time.time() < deadline:
+            if comfyui_online(port):
+                break
+            if _COMFY_PROC.poll() is not None:
+                tail = log.read_text(encoding="utf-8", errors="ignore").splitlines()[-8:] if log.is_file() else []
+                raise RuntimeError("ComfyUI ออกก่อนพร้อมใช้งาน:\n" + "\n".join(tail))
+            time.sleep(2)
+        else:
+            raise TimeoutError(f"ComfyUI ไม่ขึ้นภายใน {wait_s}s — ดู log ที่ {log}")
+    # ComfyUI อาจขยับพอร์ตเองถ้า 8188 ไม่ว่าง
+    try:
+        actual = parse_comfy_port(comfyui_log_path(root).read_text(encoding="utf-8", errors="ignore"), port)
+    except OSError:
+        actual = port
+    if actual != port:
+        rprint(f"[yellow]⚠️ ComfyUI ใช้พอร์ต {actual} (8188 ไม่ว่าง) — ใช้พอร์ตนี้แทน[/yellow]")
+        if not comfyui_online(actual):
+            actual = port
+    try:
+        url, via = ensure_public_url(actual, prefer=public)
+    except Exception as e:  # noqa: BLE001 - ยังคืน localhost ให้ผู้ใช้ไปต่อได้
+        rprint(f"[bold red]❌ เปิดลิงก์สาธารณะไม่สำเร็จ: {e}[/bold red]")
+        url, via = comfyui_public_url(actual), "fallback"
+    label = {"colab": "Colab proxy", "cloudflared": "cloudflared tunnel", "local": "localhost"}.get(via, via)
+    rprint(f"[bold green]🎨 ComfyUI พร้อมสร้างภาพ:[/bold green] {url}  [dim]({label})[/dim]")
+    if via == "cloudflared":
+        rprint("[dim]ℹ️ ลิงก์ trycloudflare เป็น tunnel ชั่วคราว (ปิดเมื่อสั่ง stop_tunnel) — อย่าแชร์ต่อ[/dim]")
+    return url
 
 
 def _close_comfy_log() -> None:
@@ -347,6 +481,7 @@ def stop_comfyui() -> bool:
             _COMFY_PROC.kill()
         _COMFY_PROC = None
         _close_comfy_log()
+        stop_tunnel()
         rprint("[bold yellow]⏹ หยุด ComfyUI แล้ว[/bold yellow]")
         return True
     _COMFY_PROC = None
@@ -367,6 +502,13 @@ def comfyui_status(port: int = COMFY_PORT) -> dict:
 
 __all__ = [
     "_extract_tarball",
+    "ensure_cloudflared",
+    "ensure_public_url",
+    "parse_cloudflared_url",
+    "parse_comfy_port",
+    "public_url_works",
+    "start_tunnel",
+    "stop_tunnel",
     "_fetch_tarball",
     "_run_git",
     "comfy_target_path",

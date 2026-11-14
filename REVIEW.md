@@ -375,6 +375,25 @@ returned non-zero exit status 128` — สาเหตุที่พบบ่�
 
 ---
 
+## 🌐 ลิงก์ ComfyUI 404 จาก Colab proxy → ตรวจ URL + fallback tunnel
+
+อาการจากผู้ใช้: ComfyUI ขึ้น (`✅ ComfyUI พร้อม`, ผูก 3 ไฟล์) แต่เปิด
+`https://8188-...prod.r.colab.dev` ได้ **HTTP 404** — Colab proxy ไม่ส่งต่อไปพอร์ตให้ในรันนั้น
+
+- `public_url_works(url)` ยิง HTTP GET จริง (timeout 8-12s) ก่อนให้ผู้ใช้เปิด — ไม่เดา
+- `parse_comfy_port()` อ่านพอร์ตจริงจาก `comfyui.log` (`To see the GUI go to: http://...:PORT`)
+  เพราะ ComfyUI จะขยับพอร์ตเองถ้า 8188 ไม่ว่าง (เดิมเรา proxy ผิดพอร์ตโดยไม่รู้)
+- `ensure_public_url(port)`: ลอง Colab proxy → ถ้า 404 และไม่ใช่ localhost จะ
+  `ensure_cloudflared()` (ดาวน์โหลด static binary ~38 MB จาก GitHub) แล้ว
+  `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:PORT` → รอจนได้
+  `https://*.trycloudflare.com` ที่ **ตรวจแล้วว่า 200** (timeout 60s)
+- `start_comfyui(public="auto")` คืน URL ที่ใช้ได้จริง + บอกช่องทาง (Colab proxy / tunnel / localhost)
+  และ `stop_comfyui()` ปิด tunnel ให้ด้วย; UI แสดงลิงก์ `🎨 เปิดหน้า ComfyUI` ในแถบเครื่องมือ
+- เทสต์ `comfyui public url`: parse port, parse trycloudflare URL, `public_url_works` (พอร์ตปิด = False),
+  `ensure_public_url` ในสภาพไม่มี Colab
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

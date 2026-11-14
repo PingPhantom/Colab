@@ -315,13 +315,17 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
     b_ref.on_click(_on_refresh)
 
     rows: dict[str, dict] = {}
+    img_link = widgets.HTML()  # ลิงก์ ComfyUI ที่ตรวจแล้วว่าเปิดได้ (แสดงในแถบเครื่องมือ)
 
     def _open_image_studio(opt: str) -> None:
         """โมเดลภาพ (kind=image): ผูกไฟล์เข้า ComfyUI แล้วเปิดหน้าเว็บสร้างภาพ"""
         ensure_comfyui()
         linked = link_image_model(opt, model_dir=model_dir)
         rprint(f"[dim]🔗 ผูกไฟล์เข้า ComfyUI {len(linked)} ไฟล์[/dim]")
-        rprint(f"[bold green]🎨 เปิด ComfyUI:[/bold green] {start_comfyui(port=COMFY_PORT)}")
+        url = start_comfyui(port=COMFY_PORT)
+        img_link.value = (
+            f"<a href='{url}' target='_blank' style='color:#38bdf8;font-size:12px;'>🎨 เปิดหน้า ComfyUI</a>"
+        )
 
     def _row_widgets(k: str) -> dict:
         is_img = MODEL_CATALOG[k].get("kind") == "image"
@@ -370,7 +374,7 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
         if not rows:
             rows_box.children = _build_rows()
             btns.clear()
-            btns.extend([b_all, b_cache, b_stat, b_stop, b_delall, b_ref, b_apply_spec, b_dl_draft, b_clr_draft, b_rm_draft])
+            btns.extend([b_all, b_cache, b_stat, b_stop, b_delall, b_ref, b_apply_spec, b_dl_draft, b_clr_draft, b_rm_draft, img_link])
             for k in ALL_PRESET_KEYS:
                 btns.extend([rows[k]["bd"], rows[k]["br"], rows[k]["bk"], rows[k]["bx"]])
         base = Path(model_dir)

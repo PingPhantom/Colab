@@ -215,3 +215,4 @@ ruff check strata tools           # lint
 
 MIT
 | `git clone ... returned non-zero exit status 128` ตอนติดตั้ง ComfyUI | โฟลเดอร์ค้างจากรอบก่อน / เน็ตหลุดกลางทาง | เวอร์ชันนี้ล้างโฟลเดอร์พัง + **fallback ดาวน์โหลด tarball จาก codeload อัตโนมัติ** และแสดง stderr จริงของ git แล้ว — กดซ้ำได้เลย |
+| ลิงก์ ComfyUI เปิดแล้ว **404 / page can't be found** | Colab proxy ไม่ส่งต่อไปยังพอร์ตให้ (บาง runtime) | เวอร์ชันนี้ตรวจลิงก์ก่อนแสดง (HTTP GET จริง) ถ้าไม่ผ่านจะเปิด **cloudflared quick tunnel** ให้อัตโนมัติ (`https://xxx.trycloudflare.com`) — ดู log บรรทัด `🎨 ComfyUI พร้อมสร้างภาพ` |

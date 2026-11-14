@@ -1285,6 +1285,28 @@ def test_comfyui_repo_bootstrap() -> None:
         ig._clear_incomplete(Path(tmp) / "missing")  # ต้องไม่พังเมื่อไม่มีอยู่
 
 
+def test_comfyui_public_url_helpers() -> None:
+    """ลิงก์ ComfyUI ต้องตรวจได้ก่อนให้ผู้ใช้เปิด — 404 แล้ว fallback tunnel"""
+    from strata import imagegen as ig
+
+    assert ig.parse_comfy_port("To see the GUI go to: http://0.0.0.0:8190", 8188) == 8190
+    assert ig.parse_comfy_port("http://127.0.0.1:9001\n", 8188) == 9001
+    assert ig.parse_comfy_port("ไม่มีอะไรเลย", 8188) == 8188, "ต้องคืนค่า fallback"
+
+    assert ig.parse_cloudflared_url("INF | https://soft-music-try.trycloudflare.com |") == (
+        "https://soft-music-try.trycloudflare.com"
+    )
+    assert ig.parse_cloudflared_url("ยังไม่มี URL") == ""
+
+    assert ig.public_url_works("") is False
+    assert ig.public_url_works("http://127.0.0.1:9", timeout=1.5) is False, "พอร์ตปิดต้อง False"
+
+    # ใน sandbox ไม่มี Colab -> comfyui_public_url คืน localhost และต้องไม่พยายามโหลด tunnel
+    url, via = ig.ensure_public_url(8188, prefer="auto")
+    assert via in ("local", "colab"), via
+    assert url.startswith("http"), url
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -1296,6 +1318,7 @@ def main() -> int:
     check("comfyui helpers", test_imagegen_helpers)
     check("run_stream cwd", test_run_stream_cwd)
     check("comfyui repo bootstrap", test_comfyui_repo_bootstrap)
+    check("comfyui public url", test_comfyui_public_url_helpers)
     check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
     check("performance patterns", test_perf_patterns)
