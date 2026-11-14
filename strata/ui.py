@@ -138,7 +138,7 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
             f"⬇ {_fmt_rate(net['down_bps'])} · ⬆ {_fmt_rate(net['up_bps'])}"
             "</span>"
         )
-        return f"<div style='background:#0f172a;color:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid #334155;font-family:sans-serif;margin-bottom:6px;'><div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;'><b style='font-size:15px;'>🎛️ Strata Studio (Port {port} • 10 Models + Draft/MTP/N-gram + RAG)</b><div>{sb} {spb} {rb} {nb} <span style='font-size:12px;color:#38bdf8;margin-left:4px;'>{gb}</span></div></div><div style='font-size:12px;color:#cbd5e1;margin-bottom:4px;'>💾 ดิสก์ว่าง <b style='color:{bc};'>{fg:.2f} GB</b> / {tg:.2f} GB ({pct:.1f}%)</div><div style='width:100%;background:#1e293b;height:8px;border-radius:99px;overflow:hidden;'><div style='width:{pct:.1f}%;background:{bc};height:100%;'></div></div></div>"
+        return f"<div style='background:#0f172a;color:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid #334155;font-family:sans-serif;margin-bottom:6px;'><div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;'><b style='font-size:15px;'>🎛️ Strata Studio (Port {port} • {len(ALL_PRESET_KEYS)} Models + Draft/MTP/N-gram + RAG)</b><div>{sb} {spb} {rb} {nb} <span style='font-size:12px;color:#38bdf8;margin-left:4px;'>{gb}</span></div></div><div style='font-size:12px;color:#cbd5e1;margin-bottom:4px;'>💾 ดิสก์ว่าง <b style='color:{bc};'>{fg:.2f} GB</b> / {tg:.2f} GB ({pct:.1f}%)</div><div style='width:100%;background:#1e293b;height:8px;border-radius:99px;overflow:hidden;'><div style='width:{pct:.1f}%;background:{bc};height:100%;'></div></div></div>"
 
     def _draft_opts() -> list[tuple[str, str]]:
         opts = []
@@ -225,7 +225,7 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
         threading.Thread(target=_net_loop, daemon=True).start()
 
     b_net.on_click(_toggle_net)
-    b_all, b_cache, b_stat, b_stop, b_delall, b_ref = _B("📦 โหลดครบ 10 ตัว", "primary", "155px"), _B("🧹 ล้างแคช", "info", "105px"), _B("📡 สถานะ", "", "95px"), _B("🛑 หยุด Server", "warning", "115px"), _B("🗑️ ลบทั้งหมด", "danger", "105px"), _B("🔄 รีเฟรช", "", "88px")
+    b_all, b_cache, b_stat, b_stop, b_delall, b_ref = _B(f"📦 โหลดครบ {len(ALL_PRESET_KEYS)} ตัว", "primary", "155px"), _B("🧹 ล้างแคช", "info", "105px"), _B("📡 สถานะ", "", "95px"), _B("🛑 หยุด Server", "warning", "115px"), _B("🗑️ ลบทั้งหมด", "danger", "105px"), _B("🔄 รีเฟรช", "", "88px")
     chk_del = widgets.Checkbox(value=False, description="ยืนยันลบทั้งหมด", indent=False, layout=_L(width="125px"))
 
     busy = {"n": 0}

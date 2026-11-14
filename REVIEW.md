@@ -275,6 +275,27 @@ release ใหม่ตอบกลับ `error while handling argument "--draf
 
 ---
 
+## 🐋 เพิ่ม preset: DeepSeek-V4.1-Flash-1017-abliterated
+
+`orcarouter/DeepSeek-V4.1-Flash-1017-abliterated-GGUF` (ตามที่ผู้ใช้ขอ) — repo มี 2 ชุด shard:
+
+| ชุด | ไฟล์ | ขนาดรวม |
+|---|---|---|
+| `Mix-128G` | 5 shards | ~224.6 GB (ใช้ค่านี้ใน `approx_gb`) |
+| `Mix-256G` | 7 shards | ~346.4 GB |
+| แถม | `mmproj-*BF16.gguf` (~0.9 GB), `mmproj-*F16.gguf`, `imatrix.gguf` | |
+
+- `include`: `["Mix-128G/*", "mmproj-*BF16.gguf"]`, `exclude`: `["imatrix.gguf"]`
+  (ทดสอบกับรายชื่อไฟล์จริงแล้ว: เลือก Mix-128G + mmproj BF16, ข้าม Mix-256G/F16/imatrix)
+- `_pick_main_gguf()` รองรับ sharded GGUF อยู่แล้ว: เลือก `-00001-of-00005` เป็นตัวหลัก,
+  รวมขนาดทุก shard มาคิด VRAM และฟ้องถ้า shard ขาด
+- UI: เปลี่ยนข้อความ "10 Models"/"โหลดครบ 10 ตัว" เป็น `len(ALL_PRESET_KEYS)` (ตอนนี้ 11)
+- เทสต์ `public API / catalog` เข้มขึ้น: key ไม่ซ้ำ, catalog = preset + custom, ตรวจ `approx_gb`/`include`
+  และยืนยัน preset ใหม่ชี้ repo ที่ถูกต้อง + ต้องมี pattern `Mix-128G`
+- ⚠️ ตัวโมเดลใหญ่ 225 GB — Colab ฟรีมีดิสก์ ~110 GB so `download_model_files()` จะปฏิเสธพร้อมบอกขนาดที่ขาด
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

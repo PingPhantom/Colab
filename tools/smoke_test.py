@@ -143,13 +143,25 @@ def test_public_api() -> None:
     from strata.config import ALL_PRESET_KEYS, MODEL_CATALOG, SPEC_STATE
 
     assert strata.__version__
-    assert len(ALL_PRESET_KEYS) == 10, f"preset ต้องมี 10 ตัว ได้ {len(ALL_PRESET_KEYS)}"
-    assert len(MODEL_CATALOG) == 11, "MODEL_CATALOG ต้องมี 10 preset + custom"
+    assert len(ALL_PRESET_KEYS) >= 10, f"preset ต้องมีอย่างน้อย 10 ตัว ได้ {len(ALL_PRESET_KEYS)}"
+    assert len(ALL_PRESET_KEYS) == len(set(ALL_PRESET_KEYS)), "preset key ต้องไม่ซ้ำ"
+    assert len(MODEL_CATALOG) == len(ALL_PRESET_KEYS) + 1, "MODEL_CATALOG = preset + custom"
     assert set(ALL_PRESET_KEYS) <= set(MODEL_CATALOG), "preset ทุกตัวต้องอยู่ใน catalog"
     assert "ctx_size" not in SPEC_STATE or isinstance(SPEC_STATE["ctx_size"], int)
     for key, cfg in MODEL_CATALOG.items():
         assert re.fullmatch(r"[\w.\-]+/[\w.\-]+", cfg["repo_id"]), f"{key}: repo_id ผิดรูป"
         assert isinstance(cfg["desc"], str) and cfg["desc"], f"{key}: ต้องมี desc"
+        assert isinstance(cfg["approx_gb"], (int, float)) and cfg["approx_gb"] >= 0, f"{key}: approx_gb ผิด"
+        inc = cfg["include"]
+        assert inc is None or (isinstance(inc, list) and inc), f"{key}: include ต้องเป็น list หรือ None"
+        if inc:
+            assert all(isinstance(x, str) and x for x in inc), f"{key}: include ต้องเป็นสตริง"
+
+    # preset ใหม่ (repo จริงบน Hugging Face) — sharded GGUF ต้องตั้ง include ให้ครบชุด
+    ds = MODEL_CATALOG["deepseek-v41-flash-abliterated"]
+    assert ds["repo_id"] == "orcarouter/DeepSeek-V4.1-Flash-1017-abliterated-GGUF"
+    assert any("Mix-128G" in pat for pat in ds["include"]), "ต้องระบุโฟลเดอร์ shard ที่ต้องการ"
+    assert ds["approx_gb"] > 200, "โมเดลนี้ใหญ่ระดับ 200GB+"
 
 
 def test_lazy_imports() -> None:

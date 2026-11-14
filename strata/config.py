@@ -19,14 +19,15 @@ ModelOptionType = Literal[
     "none", "all", "sakura-minimax-h3", "qwen38-27b-cyber",
     "qwen38-27b-rvn-heretic", "qwen38-27b-coletti", "muse-glimmer-30b-heretic",
     "minicpm-v47-35b", "lfm25-24b-a2b", "qwen35-9b-defiant-fable",
-    "ornith-15-9b", "nemotron-35-bolt-74b", "custom",
+    "ornith-15-9b", "nemotron-35-bolt-74b", "deepseek-v41-flash-abliterated",
+    "custom",
 ]
 
 ALL_PRESET_KEYS: list[str] = [
     "sakura-minimax-h3", "qwen38-27b-cyber", "qwen38-27b-rvn-heretic",
     "qwen38-27b-coletti", "muse-glimmer-30b-heretic", "minicpm-v47-35b",
     "lfm25-24b-a2b", "qwen35-9b-defiant-fable", "ornith-15-9b",
-    "nemotron-35-bolt-74b",
+    "nemotron-35-bolt-74b", "deepseek-v41-flash-abliterated",
 ]
 
 MODEL_OPTION: ModelOptionType = "none"
@@ -84,6 +85,16 @@ MODEL_CATALOG: dict[str, dict] = {
     "qwen35-9b-defiant-fable": {"repo_id": "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF", "include": ["*Q4_K_M*", "*mmproj-F16*"], "exclude": ["*draft*"], "approx_gb": 6.4, "has_mtp": True, "desc": "📖 Qwen3.5-9B-Defiant-Fable (Q4_K_M + MTP) T4 ลื่น"},
     "ornith-15-9b": {"repo_id": "mradermacher/Ornith-1.5-9B-uncensored-GGUF", "include": ["*Q4_K_M*", "*mmproj-Q8_0*"], "exclude": None, "approx_gb": 6.4, "has_mtp": False, "desc": "🦅 Ornith-1.5-9B-uncensored (Q4_K_M) ลง T4 ได้ทั้งตัว"},
     "nemotron-35-bolt-74b": {"repo_id": "AtomicChat/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Uncensored-GGUF", "include": ["*IQ2*", "*IQ3_XXS*", "*mmproj*"], "exclude": None, "approx_gb": 24.5, "has_mtp": False, "desc": "🚀 Nemotron-3.5-Bolt-74B-A9B (9B active MoE)"},
+    # ⚠️ โมเดลระดับ data-center: Mix-128G ≈ 225 GB (Mix-256G ≈ 346 GB) — ต้องมีดิสก์ ≥ 250 GB
+    # และ RAM/VRAM มาก (A100/H100 หรือ offload ลง CPU) ไม่เหมาะกับ Colab ฟรี (ดิสก์ ~110 GB)
+    "deepseek-v41-flash-abliterated": {
+        "repo_id": "orcarouter/DeepSeek-V4.1-Flash-1017-abliterated-GGUF",
+        "include": ["Mix-128G/*", "mmproj-*BF16.gguf"],
+        "exclude": ["imatrix.gguf"],
+        "approx_gb": 224.6,
+        "has_mtp": False,
+        "desc": "🐋 DeepSeek-V4.1-Flash-1017 (abliterated, MoE, 5 shards ~225GB — A100/H100 เท่านั้น)",
+    },
     "custom": {"repo_id": CUSTOM_HF_REPO, "include": None, "exclude": None, "approx_gb": 0.0, "has_mtp": False, "desc": "⚙️ กำหนด Repo เอง"},
 }
 

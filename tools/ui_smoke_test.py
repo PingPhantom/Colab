@@ -179,7 +179,10 @@ def main() -> int:
                 tops = [
                     b for b in all_w
                     if isinstance(b, widgets.Button)
-                    and b.description in ("📦 โหลดครบ 10 ตัว", "🧹 ล้างแคช", "📡 สถานะ", "🛑 หยุด Server", "🗑️ ลบทั้งหมด")
+                    and (
+                        b.description.startswith("📦 โหลดครบ")
+                        or b.description in ("🧹 ล้างแคช", "📡 สถานะ", "🛑 หยุด Server", "🗑️ ลบทั้งหมด")
+                    )
                 ]
                 stuck = [b.description for b in tops if b.disabled]
                 assert not stuck, f"ปุ่มค้าง disabled หลังทำงานเสร็จ: {stuck}"
