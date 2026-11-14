@@ -7,11 +7,14 @@ symlink เข้า `ComfyUI/models/...`, ติดตั้ง ComfyUI(+ComfyU
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
+import urllib.request
 from pathlib import Path
 
 from rich import print as rprint
@@ -25,7 +28,7 @@ from .config import (
     MODEL_DIR,
 )
 from .download import download_model_files
-from .utils import _dir_bytes, run_stream
+from .utils import _dir_bytes, _remember, run_stream
 
 COMFY_REPO = "https://github.com/comfyanonymous/ComfyUI"
 GGUF_NODE_REPO = "https://github.com/city96/ComfyUI-GGUF"
@@ -132,23 +135,133 @@ def comfyui_command(port: int = COMFY_PORT, lowvram: bool = True, comfy_dir: str
     return cmd
 
 
+TARBALL_BRANCHES = ("master", "main")  # ลองทีละชื่อ branch ตอนโหลด tarball
+
+
+def _say(text: str) -> None:
+    """เขียนทั้งลง log สดของ UI และ stdout"""
+    _remember(text)
+    print(text)
+
+
+def _run_git(args: list[str], cwd: Path | None = None, timeout: int = 900) -> None:
+    """รัน git แบบเก็บ stderr ไว้ในข้อความ error — clone ล้มจะได้รู้สาเหตุจริงไม่ใช่แค่ exit 128"""
+    cmd = ["git", *args]
+    try:
+        p = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"รัน `{' '.join(cmd)}` ไม่ได้: {e}") from e
+    for line in ((p.stdout or "") + (p.stderr or "")).splitlines()[-15:]:
+        _say(line)
+    if p.returncode != 0:
+        raw = (p.stderr or p.stdout or "").strip().splitlines()
+        tail = " | ".join(x.strip() for x in raw[-3:] if x.strip()) or "(git ไม่ได้บอกสาเหตุ)"
+        raise RuntimeError(f"`{' '.join(cmd)}` ล้มเหลว (exit {p.returncode}): {tail}")
+
+
 def _git(args: list[str], cwd: Path | None = None) -> None:
-    run_stream(" ".join(["git", *args]), cwd=cwd)
+    """alias เดิม (เก็บไว้ให้โค้ด/เทสต์เก่าเรียกได้)"""
+    _run_git(args, cwd=cwd)
+
+
+def _repo_slug(repo_url: str) -> str:
+    """https://github.com/owner/name(.git) -> owner/name"""
+    s = repo_url.rstrip("/").removesuffix(".git")
+    return s.split("github.com/")[-1] if "github.com/" in s else s
+
+
+def _extract_tarball(data: bytes, dest: Path) -> None:
+    """แตก tar.gz ของ GitHub (ตัดโฟลเดอร์ชั้นบนสุดออก) ลง dest แบบปลอดภัย"""
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        members = []
+        for m in tar.getmembers():
+            parts = m.name.split("/", 1)
+            if len(parts) < 2 or not parts[1]:
+                continue  # entry ของโฟลเดอร์บนสุด / ไฟล์เปล่า
+            m.name = parts[1]
+            members.append(m)
+        try:
+            tar.extractall(dest, members=members, filter="data")  # py>=3.12
+        except TypeError:  # python เก่าไม่มี filter=
+            tar.extractall(dest, members=members)
+
+
+def _fetch_tarball(repo_url: str, dest: Path) -> None:
+    """ดาวน์โหลดซอร์สเป็น tarball จาก codeload (ใช้เมื่อ git clone ไม่ผ่าน)"""
+    slug = _repo_slug(repo_url)
+    last = ""
+    for br in TARBALL_BRANCHES:
+        url = f"https://codeload.github.com/{slug}/tar.gz/refs/heads/{br}"
+        try:
+            with urllib.request.urlopen(url, timeout=180) as r:
+                data = r.read()
+        except Exception as e:  # noqa: BLE001 - รายงานสาเหตุสุดท้ายให้ผู้ใช้เห็น
+            last = f"{br}: {e}"
+            continue
+        _say(f"⬇️ ดาวน์โหลด tarball {slug}@{br} (~{len(data) / 1024**2:.0f} MB)")
+        _extract_tarball(data, dest)
+        return
+    raise RuntimeError(f"ดาวน์โหลด {slug} เป็น tarball ไม่สำเร็จ ({last})")
+
+
+def _clear_incomplete(dest: Path) -> None:
+    """ล้างโฟลเดอร์ที่โคลนค้าง/พัง (git clone ซ้ำจะได้ไม่ error 128 'not an empty directory')"""
+    dest = Path(dest)
+    if not dest.exists():
+        return
+    try:
+        empty = not any(dest.iterdir())
+    except OSError:
+        empty = False
+    if empty:
+        dest.rmdir()
+        return
+    rprint(f"[yellow]🧹 ล้างโฟลเดอร์เดิมที่ไม่สมบูรณ์: {dest}[/yellow]")
+    shutil.rmtree(dest, ignore_errors=True)
+
+
+def _clone_or_tarball(repo_url: str, dest: Path, marker: str = "main.py") -> None:
+    """clone แบบ depth 1 → ถ้าไม่ผ่านให้ fallback เป็น tarball อัตโนมัติ"""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _run_git(["clone", "--depth", "1", repo_url, str(dest)])
+        if (dest / marker).exists():
+            return
+        rprint(f"[yellow]⚠️ clone เสร็จแต่ไม่พบ {marker} — ลองดาวน์โหลด tarball แทน[/yellow]")
+    except RuntimeError as e:
+        rprint(f"[yellow]⚠️ git clone ไม่สำเร็จ: {e}[/yellow]")
+        rprint("[yellow]→ ลองดาวน์โหลดเป็น tarball จาก codeload แทน[/yellow]")
+    _clear_incomplete(dest)
+    _fetch_tarball(repo_url, dest)
+    if not (dest / marker).exists():
+        raise RuntimeError(f"ติดตั้ง {_repo_slug(repo_url)} แล้วแต่ไม่พบ {marker} ใน {dest}")
 
 
 def ensure_comfyui(pull: bool = True, comfy_dir: str | Path = COMFY_DIR) -> Path:
     """โคลน/อัปเดต ComfyUI + custom node GGUF แล้วติดตั้ง dependency (ข้ามถ้ามีอยู่แล้ว)"""
     root = Path(comfy_dir)
     if not (root / "main.py").is_file():
-        root.parent.mkdir(parents=True, exist_ok=True)
-        _git(["clone", "--depth", "1", COMFY_REPO, str(root)])
+        _clear_incomplete(root)
+        _clone_or_tarball(COMFY_REPO, root, marker="main.py")
     elif pull:
-        _git(["pull", "--ff-only"], cwd=root)
+        try:
+            _run_git(["pull", "--ff-only"], cwd=root)
+        except RuntimeError as e:
+            rprint(f"[yellow]⚠️ อัปเดต ComfyUI ไม่ได้ (ใช้ของเดิมต่อ): {e}[/yellow]")
     node = root / "custom_nodes" / GGUF_NODE_DIRNAME
-    if not node.is_dir():
-        _git(["clone", "--depth", "1", GGUF_NODE_REPO, str(node)])
-    if shutil.which("git") is None:
-        raise RuntimeError("ไม่พบคำสั่ง git — ต้องมี git ก่อนจึงจะติดตั้ง ComfyUI ได้ (Colab มีให้อยู่แล้ว)")
+    if not (node / "nodes.py").is_file():
+        _clear_incomplete(node)
+        _clone_or_tarball(GGUF_NODE_REPO, node, marker="nodes.py")
     req = root / "requirements.txt"
     try:
         if req.is_file():
@@ -253,6 +366,9 @@ def comfyui_status(port: int = COMFY_PORT) -> dict:
 
 
 __all__ = [
+    "_extract_tarball",
+    "_fetch_tarball",
+    "_run_git",
     "comfy_target_path",
     "comfyui_command",
     "comfyui_online",

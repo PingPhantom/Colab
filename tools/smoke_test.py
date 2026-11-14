@@ -1229,20 +1229,60 @@ def test_run_stream_cwd() -> None:
         assert Path(tmp).resolve().as_posix() in buf.getvalue(), f"คำสั่งไม่ได้รันใน cwd: {buf.getvalue()!r}"
         assert any("ใน " + tmp in line for line in recent_log(6)), "log ต้องบอกโฟลเดอร์ที่รัน"
 
-    # imagegen._git ต้องส่ง cwd แบบ keyword ได้โดยไม่ TypeError
-    calls: dict = {}
-    real = ig.run_stream
+    # imagegen._git ต้องรับ cwd ได้ (ไม่ TypeError) — ตอนนี้รัน git จริงผ่าน subprocess
+    if shutil.which("git"):
+        with tempfile.TemporaryDirectory() as gitdir:
+            ig._git(["init", "-q"], cwd=Path(gitdir))
+            assert (Path(gitdir) / ".git").is_dir(), "_git ต้องรันใน cwd ที่ให้มา"
 
-    def fake(cmd, **kw):
-        calls["cmd"], calls["kw"] = cmd, kw
 
-    ig.run_stream = fake
-    try:
-        ig._git(["pull", "--ff-only"], cwd=Path("/tmp/comfy-test"))
-    finally:
-        ig.run_stream = real
-    assert calls["cmd"].startswith("git pull"), calls
-    assert str(calls["kw"].get("cwd")) == "/tmp/comfy-test", calls
+def test_comfyui_repo_bootstrap() -> None:
+    """ติดตั้ง ComfyUI: clone ล้มต้องได้สาเหตุจริง + fallback tarball + ล้างโฟลเดอร์พัง"""
+    import io
+    import shutil
+    import tarfile
+    import tempfile
+
+    from strata import imagegen as ig
+
+    assert ig._repo_slug("https://github.com/comfyanonymous/ComfyUI.git") == "comfyanonymous/ComfyUI"
+
+    # 1) tarball ของ GitHub: ตัดโฟลเดอร์ชั้นบนสุดออก
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, data in (("Repo-main/main.py", b"print(1)"), ("Repo-main/sub/x.txt", b"x")):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out"
+        ig._extract_tarball(buf.getvalue(), out)
+        assert (out / "main.py").is_file(), "ต้องแตกไฟล์โดยไม่มีโฟลเดอร์ชั้นบน"
+        assert (out / "sub" / "x.txt").is_file()
+
+    # 2) _run_git ที่ล้มเหลวต้องพา stderr ของ git มาด้วย (เดิมได้แค่ exit 128 เฉย ๆ)
+    if shutil.which("git"):
+        with tempfile.TemporaryDirectory() as tmp:
+            raised = ""
+            try:
+                ig._run_git(["rev-parse", "--verify", "no-such-branch-xyz"], cwd=Path(tmp))
+            except RuntimeError as e:
+                raised = str(e)
+            assert "ล้มเหลว (exit" in raised, raised
+            assert "git ไม่ได้บอกสาเหตุ" not in raised, f"ควรมีข้อความจาก git: {raised!r}"
+
+    # 3) โฟลเดอร์โคลนค้าง (ไม่ว่าง ไม่มี main.py) ต้องถูกล้างก่อน clone ใหม่
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / "ComfyUI"
+        (dest / "junk").mkdir(parents=True)
+        (dest / "junk" / "a.txt").write_text("x")
+        ig._clear_incomplete(dest)
+        assert not dest.exists(), "โฟลเดอร์ที่ไม่สมบูรณ์ต้องถูกล้าง"
+        empty = Path(tmp) / "empty"
+        empty.mkdir()
+        ig._clear_incomplete(empty)
+        assert not empty.exists(), "โฟลเดอร์ว่างต้องถูกลบ"
+        ig._clear_incomplete(Path(tmp) / "missing")  # ต้องไม่พังเมื่อไม่มีอยู่
 
 
 def main() -> int:
@@ -1255,6 +1295,7 @@ def main() -> int:
     check("image model catalog", test_image_catalog)
     check("comfyui helpers", test_imagegen_helpers)
     check("run_stream cwd", test_run_stream_cwd)
+    check("comfyui repo bootstrap", test_comfyui_repo_bootstrap)
     check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
     check("performance patterns", test_perf_patterns)

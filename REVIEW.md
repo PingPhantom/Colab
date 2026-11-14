@@ -359,6 +359,22 @@ repo มี 3 ตระกูลไฟล์ชื่อคล้ายกัน
 
 ---
 
+## 🧯 clone ComfyUI ล้ม (exit 128) → fallback tarball
+
+อาการจากผู้ใช้: `Command 'git clone --depth 1 https://github.com/comfyanonymous/ComfyUI /content/ComfyUI'
+returned non-zero exit status 128` — สาเหตุที่พบบ่อยคือโฟลเดอร์ `/content/ComfyUI` ค้างจากรอบก่อน
+หรือเน็ต Colab สะดุด และ `run_stream` เดิมกลืน stderr เลยไม่รู้ว่าจิทบอกอะไร
+
+- `_run_git()` (ใหม่) รัน `subprocess.run(capture_output=True)` → เก็บ stderr 3 บรรทัดท้ายไว้ในข้อความ error
+  (`... ล้มเหลว (exit 128): <สาเหตุจาก git>`) และปิด prompt  credentials ด้วย `GIT_TERMINAL_PROMPT=0`
+- `_clear_incomplete()` ลบโฟลเดอร์ที่โคลนค้าง (ไม่ว่างแต่ไม่มี `main.py`/`nodes.py`) ก่อนลองใหม่
+- `_clone_or_tarball()` ถ้า clone ไม่ผ่าน → ดาวน์โหลด `https://codeload.github.com/<slug>/tar.gz/refs/heads/{master,main}`
+  แล้วแตกด้วย `tarfile` (ตัดโฟลเดอร์ชั้นบนสุด, ใช้ `filter="data"` บน py3.12) — ผ่าน proxy ของ Colab ได้ชุกกว่า
+- `ensure_comfyui()`: `git pull` ล้มไม่ทำให้ทั้ง flow พัง (ใช้ของเดิมต่อ), ตรวจ custom node ด้วย `nodes.py`
+- เทสต์ `comfyui repo bootstrap`: แตก tarball ตัดชั้นบน, `_run_git` พา stderr จริงมา, `_clear_incomplete` ลบโฟลเดอร์พัง/ว่าง/ไม่มีอยู่
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

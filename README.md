@@ -214,3 +214,4 @@ ruff check strata tools           # lint
 ## License
 
 MIT
+| `git clone ... returned non-zero exit status 128` ตอนติดตั้ง ComfyUI | โฟลเดอร์ค้างจากรอบก่อน / เน็ตหลุดกลางทาง | เวอร์ชันนี้ล้างโฟลเดอร์พัง + **fallback ดาวน์โหลด tarball จาก codeload อัตโนมัติ** และแสดง stderr จริงของ git แล้ว — กดซ้ำได้เลย |
