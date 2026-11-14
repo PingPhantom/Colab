@@ -296,6 +296,20 @@ release ใหม่ตอบกลับ `error while handling argument "--draf
 
 ---
 
+## 🔧 แก้ preset `qwen35-9b-defiant-fable` (repo DavidAU Qwen3.5-9B Defiant Fable)
+
+โมเดลนี้มีอยู่ในแคตตาล็อกแล้ว แต่ `include: ["*Q4_K_M*", "*mmproj-F16*"]` กวาดมาทั้ง
+`...-NEO-MAX-MTP-Q4_K_M.gguf` **และ** `...-NEO-MAX-Q4_K_M.gguf` → เปลืองดิสก์ ~13.8 GB
+และ repo นี้ไม่มีไฟล์ imatrix (มีแค่ mmproj BF16/F16/F32 + plusIQ/TOOLS)
+
+- `include`: `["*-NEO-MAX-MTP-Q4_K_M.gguf", "mmproj-F16.gguf"]`
+- `exclude`: `["*plusIQ*", "mmproj-*F32*", "mmproj-*BF16*"]`
+- `approx_gb`: 7.4 (Q4_K_M MTP 6.98 GB + mmproj F16 0.92 GB), `has_mtp: True`
+- เทสต์ใหม่ `catalog download patterns`: ยืนยันเลือกเฉพาะไฟล์ MTP + mmproj F16 และข้ามรุ่นซ้ำ
+  (รวมถึง preset DeepSeek ที่ต้องเลือกเฉพาะ Mix-128G และไม่โหลด imatrix)
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

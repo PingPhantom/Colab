@@ -82,7 +82,15 @@ MODEL_CATALOG: dict[str, dict] = {
     "muse-glimmer-30b-heretic": {"repo_id": "0bserverx/Muse-Glimmer-30B-Heretic-Uncensored-GGUF", "include": ["*IQ4_XS*", "*mmproj*"], "exclude": None, "approx_gb": 15.3, "has_mtp": False, "desc": "✨ Muse-Glimmer-30B-Heretic (IQ4_XS) Multimodal"},
     "minicpm-v47-35b": {"repo_id": "AtomicChat/MiniCPM-V-4.7-35B-A3B-Uncensored-GGUF", "include": ["*IQ4_XS*", "*Q4_K_M*", "*mmproj*"], "exclude": None, "approx_gb": 20.5, "has_mtp": False, "desc": "👁️ MiniCPM-V-4.7-35B-A3B (3B active MoE) Vision"},
     "lfm25-24b-a2b": {"repo_id": "AtomicChat/LFM2.5-24B-A2B-Uncensored-GGUF", "include": ["*Q4_K_M*", "*IQ4_XS*"], "exclude": None, "approx_gb": 14.5, "has_mtp": False, "desc": "⚡ LFM2.5-24B-A2B (2B active MoE) เร็วสูง หลายภาษา"},
-    "qwen35-9b-defiant-fable": {"repo_id": "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF", "include": ["*Q4_K_M*", "*mmproj-F16*"], "exclude": ["*draft*"], "approx_gb": 6.4, "has_mtp": True, "desc": "📖 Qwen3.5-9B-Defiant-Fable (Q4_K_M + MTP) T4 ลื่น"},
+    # repo มีทั้งรุ่น MTP และไม่-MTP: `*Q4_K_M*` เดิมกวาดมาทั้งคู่ (~13.8GB) -> เลือกเฉพาะไฟล์ MTP ตัวเดียว
+    "qwen35-9b-defiant-fable": {
+        "repo_id": "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF",
+        "include": ["*-NEO-MAX-MTP-Q4_K_M.gguf", "mmproj-F16.gguf"],
+        "exclude": ["*plusIQ*", "mmproj-*F32*", "mmproj-*BF16*"],
+        "approx_gb": 7.4,
+        "has_mtp": True,
+        "desc": "📖 Qwen3.5-9B-Defiant-Fable Heretic NEO (MTP Q4_K_M 7.0GB + mmproj) T4 ลื่น",
+    },
     "ornith-15-9b": {"repo_id": "mradermacher/Ornith-1.5-9B-uncensored-GGUF", "include": ["*Q4_K_M*", "*mmproj-Q8_0*"], "exclude": None, "approx_gb": 6.4, "has_mtp": False, "desc": "🦅 Ornith-1.5-9B-uncensored (Q4_K_M) ลง T4 ได้ทั้งตัว"},
     "nemotron-35-bolt-74b": {"repo_id": "AtomicChat/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-Uncensored-GGUF", "include": ["*IQ2*", "*IQ3_XXS*", "*mmproj*"], "exclude": None, "approx_gb": 24.5, "has_mtp": False, "desc": "🚀 Nemotron-3.5-Bolt-74B-A9B (9B active MoE)"},
     # ⚠️ โมเดลระดับ data-center: Mix-128G ≈ 225 GB (Mix-256G ≈ 346 GB) — ต้องมีดิสก์ ≥ 250 GB

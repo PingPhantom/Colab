@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import io
 import json
 import os
@@ -1087,12 +1088,39 @@ def test_shell_env_persistence() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_catalog_download_patterns() -> None:
+    """include/exclude ของ preset ต้องเลือกไฟล์ที่ตั้งใจจริง — กันเคสกวาดไฟล์ซ้ำ (จ่ายดิสก์ 2 เท่า)"""
+    from strata.config import MODEL_CATALOG
+
+    def picks(key: str, filename: str) -> bool:
+        cfg = MODEL_CATALOG[key]
+        inc = cfg.get("include") or []
+        exc = cfg.get("exclude") or []
+        hit = any(fnmatch.fnmatch(filename, p) or fnmatch.fnmatch(Path(filename).name, p) for p in inc)
+        ban = any(fnmatch.fnmatch(filename, p) or fnmatch.fnmatch(Path(filename).name, p) for p in exc)
+        return hit and not ban
+
+    q = "qwen35-9b-defiant-fable"
+    assert picks(q, "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q4_K_M.gguf"), "ต้องโหลดไฟล์ MTP"
+    assert not picks(q, "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-Q4_K_M.gguf"), "ห้ามโหลดรุ่นไม่-MTP ซ้ำ"
+    assert not picks(q, "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q8_0.gguf"), "โหลด quant เดียวพอ"
+    assert picks(q, "mmproj-F16.gguf"), "ต้องมี mmproj สำหรับ multimodal"
+    assert not picks(q, "mmproj-F32.gguf"), "ไม่ต้องโหลด mmproj ซ้ำหลายแบบ"
+    assert MODEL_CATALOG[q]["has_mtp"] is True, "รุ่นนี้มี MTP head"
+
+    d = "deepseek-v41-flash-abliterated"
+    assert picks(d, "Mix-128G/DeepSeek-V4.1-Flash-1017-abliterated-Mix-128G-00001-of-00005.gguf")
+    assert not picks(d, "Mix-256G/DeepSeek-V4.1-Flash-1017-abliterated-Mix-256G-00001-of-00007.gguf"), "ข้ามชุด 256G"
+    assert not picks(d, "imatrix.gguf"), "imatrix ใช้ตอนทำ quant เท่านั้น"
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
     check("notebook cells compile", test_notebook_cells_compile)
     check("package compiles + no bad f-string", test_package_compiles)
     check("public API / catalog", test_public_api)
+    check("catalog download patterns", test_catalog_download_patterns)
     check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
     check("performance patterns", test_perf_patterns)
