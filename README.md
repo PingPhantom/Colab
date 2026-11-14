@@ -2,7 +2,7 @@
 
 <a href="https://colab.research.google.com/github/PingPhantom/Colab/blob/main/nix.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
 
-จัดการโมเดล **GGUF** บน [llama.cpp](https://github.com/ggml-org/llama.cpp) พร้อม **StrataRAG** (คลังความรู้จาก PDF/ข้อความ)
+จัดการโมเดล **GGUF** บน [llama.cpp](https://github.com/ggml-org/llama.cpp) พร้อม **StrataRAG** — ใช้ได้ทั้ง **Google Colab** และ **Kaggle Notebooks** (คลังความรู้จาก PDF/ข้อความ)
 และ UI 4 แท็บสำหรับ Google Colab — ใช้ GPU T4 ฟรีก็รันได้
 
 > โค้ดทั้งหมดอยู่ในแพ็กเกจ [`strata/`](./strata) ส่วน `nix.ipynb` เหลือแค่เซลล์ติดตั้ง + เปิด UI
@@ -12,6 +12,9 @@
 ## ✨ ความสามารถ
 
 - **15 โมเดล preset (13 ข้อความ + 2 สร้างภาพ) + custom repo** — ดาวน์โหลด/ลบ/เก็บตัวเดียว, เช็กดิสก์และ VRAM ก่อนโหลด
+- **🐨 รองรับ Kaggle Notebooks** — ตรวจแพลตฟอร์มอัตโนมัติ (`strata/platforms.py`): Kaggle เก็บโมเดลที่
+  `/kaggle/temp/strata` (ไม่ติดลิมิต 20 GB ของ `/kaggle/working`), ไม่มี port proxy จึงเปิด ComfyUI ผ่าน
+  cloudflared tunnel ให้เอง, Colab ยังใช้ `proxyPort` เหมือนเดิม
 - **🎨 โมเดลสร้างภาพอยู่ในลิสต์เดียวกัน** — Qwen-Image-2.1 / FLUX-3-Klein มีป้าย `🎨 IMAGE` ในแท็บ 1
   กด `📥 โหลด` ตามปกติ แล้วกด `🎨 สร้างภาพ` = ผูกไฟล์เข้า ComfyUI + เปิดเซิร์ฟเวอร์พอร์ต 8188 ให้ (`--lowvram` สำหรับ T4)
   (llama.cpp สร้างภาพไม่ได้ — `mmproj` มีไว้ให้โมเดล *อ่าน* ภาพ)`
@@ -216,3 +219,5 @@ ruff check strata tools           # lint
 MIT
 | `git clone ... returned non-zero exit status 128` ตอนติดตั้ง ComfyUI | โฟลเดอร์ค้างจากรอบก่อน / เน็ตหลุดกลางทาง | เวอร์ชันนี้ล้างโฟลเดอร์พัง + **fallback ดาวน์โหลด tarball จาก codeload อัตโนมัติ** และแสดง stderr จริงของ git แล้ว — กดซ้ำได้เลย |
 | ลิงก์ ComfyUI เปิดแล้ว **404 / page can't be found** | Colab proxy ไม่ส่งต่อไปยังพอร์ตให้ (บาง runtime) | เวอร์ชันนี้ตรวจลิงก์ก่อนแสดง (HTTP GET จริง) ถ้าไม่ผ่านจะเปิด **cloudflared quick tunnel** ให้อัตโนมัติ (`https://xxx.trycloudflare.com`) — ดู log บรรทัด `🎨 ComfyUI พร้อมสร้างภาพ` |
+| Kaggle: `Port 8188 is already in use` / ComfyUI ขยับพอร์ต | มีโปรเซสค้างจากรอบก่อน | โค้ดอ่านพอร์ตจริงจาก `comfyui.log` ให้แล้ว — หรือรีสตาร์ท session |
+| Kaggle: โหลดโมเดลไม่ได้ (`Could not resolve host`) | ปิด Internet อยู่ | Settings → Internet → On |

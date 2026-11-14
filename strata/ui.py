@@ -41,6 +41,7 @@ from .imagegen import (
     link_image_model,
     start_comfyui,
 )
+from .platforms import detect as detect_platform
 from .rag import GLOBAL_RAG, StrataRAG
 from .server import (
     _check_server_online,
@@ -81,6 +82,8 @@ def _L(**kw) -> widgets.Layout:
 
 def _B(desc: str, style: str = "", w: str = "110px", **kw) -> widgets.Button:
     return widgets.Button(description=desc, button_style=style, layout=_L(width=w, **kw))
+
+_PLAT = detect_platform()  # Colab / Kaggle / local — ใช้ปรับข้อความและ fallback path
 
 LIVE_REFS: list = []  # อ้างอิงตัวรีเฟรชล่าสุด (ให้เทสต์/ผู้ใช้เรียก run_once() ได้)
 
@@ -127,7 +130,7 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
     header, rag_stat, spec_hint, c_stat, rag_out, a_stat = (widgets.HTML() for _ in range(6))
 
     def _header_html() -> str:
-        cp = Path(model_dir) if Path(model_dir).exists() else Path("/content")
+        cp = Path(model_dir) if Path(model_dir).exists() else Path(_PLAT["home"])
         u = shutil.disk_usage(cp); tg, ug, fg = u.total / (1024**3), u.used / (1024**3), u.free / (1024**3)
         pct = min(100.0, ug / tg * 100) if tg else 0.0
         bc = "#22c55e" if pct < 70 else ("#f59e0b" if pct < 88 else "#ef4444")
@@ -145,7 +148,7 @@ def show_model_manager_ui(model_dir: str = MODEL_DIR, port: int = DEFAULT_PORT, 
             f"⬇ {_fmt_rate(net['down_bps'])} · ⬆ {_fmt_rate(net['up_bps'])}"
             "</span>"
         )
-        return f"<div style='background:#0f172a;color:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid #334155;font-family:sans-serif;margin-bottom:6px;'><div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;'><b style='font-size:15px;'>🎛️ Strata Studio (Port {port} • {len(ALL_PRESET_KEYS)} Models + Draft/MTP/N-gram + RAG)</b><div>{sb} {spb} {rb} {nb} <span style='font-size:12px;color:#38bdf8;margin-left:4px;'>{gb}</span></div></div><div style='font-size:12px;color:#cbd5e1;margin-bottom:4px;'>💾 ดิสก์ว่าง <b style='color:{bc};'>{fg:.2f} GB</b> / {tg:.2f} GB ({pct:.1f}%)</div><div style='width:100%;background:#1e293b;height:8px;border-radius:99px;overflow:hidden;'><div style='width:{pct:.1f}%;background:{bc};height:100%;'></div></div></div>"
+        return f"<div style='background:#0f172a;color:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid #334155;font-family:sans-serif;margin-bottom:6px;'><div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px;'><b style='font-size:15px;'>🎛️ Strata Studio ({_PLAT['label']} • Port {port} • {len(ALL_PRESET_KEYS)} Models + Draft/MTP/N-gram + RAG)</b><div>{sb} {spb} {rb} {nb} <span style='font-size:12px;color:#38bdf8;margin-left:4px;'>{gb}</span></div></div><div style='font-size:12px;color:#cbd5e1;margin-bottom:4px;'>💾 ดิสก์ว่าง <b style='color:{bc};'>{fg:.2f} GB</b> / {tg:.2f} GB ({pct:.1f}%)</div><div style='width:100%;background:#1e293b;height:8px;border-radius:99px;overflow:hidden;'><div style='width:{pct:.1f}%;background:{bc};height:100%;'></div></div></div>"
 
     def _draft_opts() -> list[tuple[str, str]]:
         opts = []

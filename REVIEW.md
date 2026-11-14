@@ -394,6 +394,27 @@ returned non-zero exit status 128` — สาเหตุที่พบบ่�
 
 ---
 
+## 🐨 รองรับ Kaggle Notebooks
+
+เดิมโค้ดถือว่าอยู่ Colab เสมอ (`/content`, `google.colab.kernel.proxyPort`) จึงพังบน Kaggle 3 จุด:
+โฟลเดอร์เก็บโมเดล, วิธีเปิด ComfyUI ในเบราว์เซอร์ และเพดานดิสก์ 20 GB ของ `/kaggle/working`
+
+- `strata/platforms.py` (ใหม่): `detect(env=None, exists=None, writable=None)` → `{name, label, home, model_dir,
+  proxy_ports, tunnel_needed, workdir, notes}`; ตรวจ Kaggle จาก env `KAGGLE_*` หรือ `/kaggle/working`
+  และ Colab จาก `COLAB_RELEASE_TAG`/`COLAB_GPU`/`/content`
+- ค่าเริ่มต้น `STRATA_HOME`: Colab `/content` • **Kaggle `/kaggle/temp/strata`** (เลี่ยงลิมิต 20 GB ของ output;
+  ถ้า temp เขียนไม่ได้ถอยไป `/kaggle/working/strata` แล้วค่อย `~/.strata`) • อื่น ๆ `~/.strata` — `STRATA_HOME` ชนะเสมอ
+- `imagegen.ensure_public_url()`: ใช้ proxyPort **เฉพาะ Colab**; Kaggle/local ที่ไม่มี proxy จะข้ามไป
+  `start_tunnel()` (cloudflared) ทันที — `prefer="colab"` บน Kaggle จะได้ error บอกให้ใช้ tunnel; local ใช้ localhost
+- UI: หัวข้อแสดงแพลตฟอร์ม (`🟡 Colab` / `🐨 Kaggle` / `💻 Local`) และ fallback path ของดิสก์ใช้ home ตามแพลตฟอร์ม
+- Notebook `v9-kaggle`: markdown อธิบาย Kaggle, เซลล์ 2 ค้นแพ็กเกจที่ `/kaggle/working/Colab` และพิมพ์
+  `label • home • model_dir` + คำเตือน (เปิด Internet / โมเดลอยู่ temp)
+- เทสต์ `kaggle/colab platform`: home selection + STRATA_HOME override, proxy_ports ต่อแพลตฟอร์ม,
+  `ensure_public_url` บน Kaggle → tunnel, บน local → localhost, `prefer="colab"` บน Kaggle → error ชัดเจน;
+  ui_smoke ตรวจว่า header มีชื่อแพลตฟอร์ม
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)

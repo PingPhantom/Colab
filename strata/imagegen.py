@@ -28,6 +28,7 @@ from .config import (
     MODEL_DIR,
 )
 from .download import download_model_files
+from .platforms import detect as detect_platform
 from .utils import _dir_bytes, _remember, run_stream
 
 COMFY_REPO = "https://github.com/comfyanonymous/ComfyUI"
@@ -372,14 +373,20 @@ def stop_tunnel() -> bool:
 
 
 def ensure_public_url(port: int, prefer: str = "auto") -> tuple[str, str]:
-    """คืน (url, ช่องทาง) — ลอง Colab proxy ก่อน แล้วค่อย fallback cloudflared"""
+    """คืน (url, ช่องทาง) — Colab ใช้ proxyPort, Kaggle/อื่น ๆ ใช้ cloudflared tunnel"""
+    info = detect_platform()
+    if info["name"] == "local" and prefer == "auto":
+        return f"http://127.0.0.1:{int(port)}", "local"  # เปิดเบราว์เซอร์บนเครื่องเดียวกันได้เลย
     if prefer in ("auto", "colab"):
-        url = comfyui_public_url(port)
-        if public_url_works(url, timeout=8):
-            return url, "colab"
-        if url.startswith("http://127.0.0.1"):
-            return url, "local"  # ไม่ได้อยู่ใน Colab — ใช้ localhost ตรง ๆ
-        rprint(f"[yellow]⚠️ ลิงก์ Colab proxy ตอบ 404 ({url}) — ลองเปิด tunnel สำรองให้[/yellow]")
+        if not info["proxy_ports"]:
+            if prefer == "colab":
+                raise RuntimeError(f"{info['label']} ไม่มี port proxy — ใช้ prefer='tunnel' แทน")
+            rprint(f"[dim]ℹ️ {info['label']} ไม่มี port proxy — เปิด cloudflared tunnel ให้[/dim]")
+        else:
+            url = comfyui_public_url(port)
+            if public_url_works(url, timeout=8):
+                return url, "colab"
+            rprint(f"[yellow]⚠️ ลิงก์ Colab proxy ตอบ 404 ({url}) — ลองเปิด tunnel สำรองให้[/yellow]")
     if prefer in ("auto", "tunnel"):
         return start_tunnel(port), "cloudflared"
     raise RuntimeError("เปิด public URL ไม่สำเร็จ")

@@ -205,7 +205,11 @@ def main() -> int:
 
             def check_network_widgets():
                 header = next(
-                    w for w in walk(displayed["root"]) if isinstance(w, widgets.HTML) and "Strata Studio (Port" in str(w.value)
+                    w for w in walk(displayed["root"]) if isinstance(w, widgets.HTML) and "Strata Studio (" in str(w.value)
+                )
+                assert "Port " in header.value, f"header ต้องบอกพอร์ต: {header.value[:90]!r}"
+                assert any(x in header.value for x in ("Colab", "Kaggle", "Local")), (
+                    f"header ต้องบอกแพลตฟอร์ม (Colab/Kaggle/Local): {header.value[:90]!r}"
                 )
                 assert "⬇" in header.value and "⬆" in header.value, "header ต้องแสดง DL/UL"
                 btn = next(b for b in all_w if isinstance(b, widgets.Button) and "วัดเน็ต" in b.description)

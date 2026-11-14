@@ -1307,6 +1307,63 @@ def test_comfyui_public_url_helpers() -> None:
     assert url.startswith("http"), url
 
 
+def test_platform_detection() -> None:
+    """รองรับ Kaggle: เลือกโฟลเดอร์/detect proxy ให้ถูก และต่อ URL ให้เหมาะกับแพลตฟอร์ม"""
+    from strata import imagegen as ig
+    from strata.platforms import detect
+
+    def ex_kaggle(p):
+        return p in ("/kaggle/working", "/kaggle/temp")
+
+    k = detect(env={"KAGGLE_KERNEL_RUN_TYPE": "Interactive"}, exists=ex_kaggle, writable=lambda _p: True)
+    assert k["name"] == "kaggle" and k["label"].endswith("Kaggle"), k
+    assert k["home"] == "/kaggle/temp/strata", f"Kaggle ควรใช้ temp (ไม่ติดลิมิต 20 GB): {k['home']}"
+    assert k["model_dir"] == "/kaggle/temp/strata/models"
+    assert k["proxy_ports"] is False and k["tunnel_needed"] is True
+    assert any("Internet" in n for n in k["notes"]), "ต้องเตือนให้เปิด Internet"
+
+    k2 = detect(
+        env={"KAGGLE_KERNEL_RUN_TYPE": "Interactive", "STRATA_HOME": "/kaggle/working/strata"},
+        exists=ex_kaggle, writable=lambda _p: True,
+    )
+    assert k2["home"] == "/kaggle/working/strata", "STRATA_HOME ต้องชนะค่าเริ่มต้น"
+
+    c = detect(env={"COLAB_RELEASE_TAG": "2026.11"}, exists=lambda p: p == "/content", writable=lambda _p: True)
+    assert c["name"] == "colab" and c["home"] == "/content" and c["proxy_ports"] is True
+
+    loc = detect(env={}, exists=lambda _p: False, writable=lambda _p: True)
+    assert loc["name"] == "local" and loc["proxy_ports"] is False
+
+    # STRATA_HOME ของจริงต้องสะท้อนแพลตฟอร์มที่ตรวจได้
+    import strata.config as cfg
+
+    assert cfg.STRATA_HOME, "STRATA_HOME ต้องมีค่า"
+
+    # Kaggle: ต้องไม่พยายามใช้ Colab proxy — ไป tunnel ตรง ๆ
+    real_detect, real_tunnel = ig.detect_platform, ig.start_tunnel
+    ig.detect_platform = lambda: k
+    ig.start_tunnel = lambda port=8188, bin_dir=None, wait_s=60: "https://fake.trycloudflare.com"
+    try:
+        url, via = ig.ensure_public_url(8188)
+        assert (url, via) == ("https://fake.trycloudflare.com", "cloudflared"), (url, via)
+        raised = ""
+        try:
+            ig.ensure_public_url(8188, prefer="colab")
+        except RuntimeError as e:
+            raised = str(e)
+        assert "port proxy" in raised, f"prefer='colab' บน Kaggle ต้องบอกชัดเจน: {raised!r}"
+    finally:
+        ig.detect_platform, ig.start_tunnel = real_detect, real_tunnel
+
+    # local: ใช้ localhost ได้เลย ไม่ต้องเปิด tunnel
+    ig.detect_platform = lambda: loc
+    try:
+        url, via = ig.ensure_public_url(8188)
+        assert via == "local" and "127.0.0.1:8188" in url, (url, via)
+    finally:
+        ig.detect_platform = real_detect
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -1319,6 +1376,7 @@ def main() -> int:
     check("run_stream cwd", test_run_stream_cwd)
     check("comfyui repo bootstrap", test_comfyui_repo_bootstrap)
     check("comfyui public url", test_comfyui_public_url_helpers)
+    check("kaggle/colab platform", test_platform_detection)
     check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
     check("performance patterns", test_perf_patterns)

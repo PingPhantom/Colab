@@ -36,10 +36,15 @@ ALL_PRESET_KEYS: list[str] = [
 MODEL_OPTION: ModelOptionType = "none"
 
 def _default_home() -> str:
-    """Colab ใช้ /content (มีอยู่จริง) — เครื่องอื่นถอยไปใช้ ~/.strata เพื่อไม่ต้องมีสิทธิ์เขียน /"""
+    """โฟลเดอร์เก็บโมเดล/log: Colab=/content, Kaggle=/kaggle/temp/strata, อื่น ๆ ~/.strata
+
+    เลือกตามแพลตฟอร์มจริง (ดู `strata/platforms.py`) — override ได้ด้วย env `STRATA_HOME`
+    """
     if os.environ.get("STRATA_HOME"):
         return os.environ["STRATA_HOME"]
-    return "/content" if Path("/content").is_dir() else str(Path.home() / ".strata")
+    from .platforms import detect  # import ตอนใช้ กัน circular import
+
+    return detect()["home"]
 
 
 STRATA_HOME: str = _default_home()
