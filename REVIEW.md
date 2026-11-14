@@ -1,0 +1,443 @@
+# รีวิว & แผนปรับปรุง (Strata Studio)
+
+เอกสารนี้สรุปสิ่งที่ตรวจพบในโปรเจกต์ — เดิมเป็นโค้ดก้อนเดียวใน `nix.ipynb` (~1,400 บรรทัด)
+ปัจจุบันอยู่ในแพ็กเกจ [`strata/`](./strata) — พร้อมสิ่งที่แก้ไปแล้วและสิ่งที่เหลือ
+
+รันทดสอบซ้ำได้ด้วย:
+
+```bash
+python3 tools/smoke_test.py       # โครงสร้าง notebook + ฟังก์ชันหลัก (ไม่ต้องมี Colab)
+python3 tools/ui_smoke_test.py    # สร้างหน้าจอจริงด้วย ipywidgets แล้วกดปุ่ม (ต้องมี ipywidgets + numpy)
+```
+
+---
+
+## ✅ แก้แล้วในรอบนี้ (P0 + P1 ที่เสี่ยงสูง)
+
+| # | ปัญหาเดิม | ผลกระทบ | วิธีแก้ |
+|---|---|---|---|
+| 1 | f-string มี backslash ใน `{expression}` (เดิมบรรทัด 750, ป้าย `KV:Q8_0`) | `SyntaxError` ทั้งเซลล์บน Python 3.11 → notebook รันไม่ขึ้นเลย | แยก string ออกจาก expression (`kv_badge = ...`) — ตอนนี้คอมไพล์ผ่านทั้ง 3.11/3.12 |
+| 2 | `_pick_main_gguf()` เรียงขนาดแล้วหยิบไฟล์ **เล็กสุด** เสมอ | เลือก quant ผิดจากที่ตั้งใจ (เช่นได้ IQ4_XS ทั้งที่โหลด Q4_K_M ไว้), เงียบเมื่อ shard ขาด | เลือก quant ใหญ่สุดที่ยังอยู่ในงบ VRAM/RAM, รับพารามิเตอร์ `prefer`/`quant`, รายงาน quant ที่พบ, shard ไม่ครบ = `FileNotFoundError` พร้อมบอกว่าขาดกี่ไฟล์ |
+| 3 | ลูป fallback ของ speculative decoding ถูกข้ามเมื่อ timeout | `TimeoutError` โยนออกทันที ทำให้ fallback (`ngram`) ไม่มีวันทำงานในเคสที่ช้าที่สุด | `_spawn()` คืน `(False, log)` แทนการ raise + terminate process ที่ค้าง แล้วไปโหมดถัดไปได้จริง (และกันโหมดซ้ำด้วย `dict.fromkeys`) |
+| 4 | `ctx_size` จาก `check_gpu_and_recommend()` ไม่เคยถูกใช้ (hardcode 4096) | ใช้ VRAM ไม่คุ้ม โดยเฉพาะ T4 16GB | `ctx_size` เป็น `None` = ใช้ค่าที่แนะนำตาม VRAM, เก็บลง `SPEC_STATE["ctx_size"]`, log ให้เห็น |
+| 5 | `download_model_files()` กลืน `RequestException` แล้วไปต่อ | ไม่รู้ว่า HF API ล้ม (404/rate limit) แล้วพังไกลจากต้นเหตุ | ตรวจ `raise_for_status()` และ raise `RuntimeError` พร้อมชื่อ repo, เพิ่ม validation `repo_id` ต้องเป็น `org/model`, ข้ามการโหลดถ้าไฟล์ครบแล้ว |
+| 6 | `tarfile/zipfile.extractall()` ไม่มี filter | Path traversal จาก archive ที่ถูกแก้ (ตัวติดตั้ง llama-server) | เพิ่ม `_safe_extract_tar()` / `_safe_extract_zip()` ตรวจปลายทางก่อนแตกไฟล์, py≥3.12 ใช้ `filter="data"` |
+| 7 | `pkill -f llama-server` | ฆ่า process อื่นที่ชื่อพ้อง และฆ่า server ที่เพิ่งสตาร์ท | `_kill_server_on_port(port)` ใช้ `pgrep -af` กรองเฉพาะ `--port <port>` + `os.kill(SIGTERM)` |
+| 8 | ต่อคำสั่ง shell ด้วย string interpolation (`uv_add`, `download-deepseek`) | Shell injection ผ่านชื่อแพ็กเกจ/glob ที่ผู้ใช้กรอก | `shlex.quote()` ทุกอาร์กิวเมนต์ + whitelist ชื่อแพ็กเกจด้วย `re.fullmatch` |
+| 9 | `remove_model()` ไม่ตรวจ path | ส่ง `../../..` ลบโฟลเดอร์นอก `model_dir` ได้ | ตรวจ `tp.parent == base.resolve()` ก่อนลบ |
+| 10 | GitHub Releases API ไม่ตรวจสถานะ | rate limit ทำให้พังด้วย `KeyError`/`AttributeError` ที่อ่านไม่รู้เรื่อง | ตรวจ `status_code`, ข้อความบอกสาเหตุ, เพิ่ม env `LLAMA_CPP_TAG` สำหรับ pin เวอร์ชัน |
+| 11 | `max_tokens` (สูงสุด 4096) + history ไม่จำกัด ชนกับ ctx 4096 | request ล้ม/ตัดคำกลางประโยคเมื่อคุยยาว | clamp `max_tokens` ตาม ctx จริง และตัด history ตามงบโทเคน |
+| 12 | ไม่มีเทสต์เลย | แก้แล้วพังโดยไม่รู้ตัว | `tools/smoke_test.py`: ตรวจโครง notebook, คอมไพล์ทั้งเซลล์, จับ f-string ที่พังบน 3.11, ทดสอบ `_pick_main_gguf` / safe extract / `uv_add` |
+
+---
+
+## ⚡ แก้แล้วรอบที่ 2 (P2 — ประสิทธิภาพ & ความถูกต้อง)
+
+| # | ปัญหาเดิม | ผลกระทบ | วิธีแก้ |
+|---|---|---|---|
+| 1 | `_refresh()` สร้าง widget แถวโมเดลใหม่ **ทั้ง 10 แถวทุกครั้ง** + `rglob` + `stat` ทุกไฟล์ + `nvidia-smi` + HTTP | UI กระตุกทุกครั้งที่ส่งแชท ปุ่มที่กำลังกดหลุดสถานะ | สร้างแถวครั้งเดียวแล้วอัปเดตแค่ `value`/`description`/`disabled`; ขนาดโฟลเดอร์ใช้ `_dir_stats()` cache 30 วิ (invalidate หลังติดตั้ง/ลบ); health check cache 1.5 วิ (`_probe_server` แยกไว้, `ttl=0` เมื่อต้องค่าใหม่) |
+| 2 | วาด HTML ใหม่ทุก token (`_fmt_reply_html(''.join(buf))`) | O(n²) — ตอบยาว ๆ แล้วกระตุกหนัก | throttle ~100ms หรือเมื่อขึ้นบรรทัดใหม่ + วาดรอบสุดท้ายครั้งเดียว (ทำทั้งแท็บแชทและ Arena) |
+| 3 | Arena hardcode `max_tokens=512` และยืม `Temp` จากแท็บแชท | เทียบโมเดลไม่ยุติธรรม ปรับแยกไม่ได้ | เพิ่ม `a_temp_sl` / `a_max_sl` ของ Arena เอง + clamp ตาม ctx จริง |
+| 4 | Chunking ตัดตามตัวอักษรดิบ ๆ (ตัดกลางคำ) | คุณภาพ RAG ต่ำ ค้นหาเพี้ยน | `split_chunks()` ตัดที่ขอบย่อหน้า/ประโยคก่อน, overlap เริ่มที่ขอบคำเสมอ, ประโยคยาวเกินค่อยตัดเป็นท่อน |
+| 5 | `np.vstack` ทุกครั้งที่เพิ่มเอกสาร (O(n²)) | นำเข้าไฟล์เยอะ ๆ ช้าลงเรื่อย ๆ | เก็บเป็น list ของ matrix แล้ว `np.concatenate` ครั้งเดียวแบบ lazy (`embeddings` property + setter คง API เดิม) |
+| 6 | `search()` คืน top-k เสมอ แม้ score ต่ำ/ติดลบ | prompt ปนข้อมูลที่ไม่เกี่ยว | เพิ่ม `min_score=0.05` (ปรับได้) และ `build_augmented_prompt(min_score=...)`, จัด rank ใหม่หลังกรอง |
+| 7 | `add_pdf_bytes()` เรียก `extract_text()` ซ้ำ 2 รอบ/หน้า | PDF ยาว ๆ ช้าเป็นเท่าตัว | extract ครั้งเดียว/หน้า + รายงานจำนวนหน้าที่ไม่มีข้อความ |
+| 8 | ไม่มี dedup / ไม่จำกัดขนาด | chunk ซ้ำ ถังบวมจน context ล้น | กันซ้ำด้วย SHA-1 ของ `source|text`, `max_chunks=4000`, ข้ามไฟล์เกิน 25 MB |
+| 9 | คลัง RAG หายทุกครั้งที่ restart | ต้อง ingest ใหม่ทุก session | `save()`/`load()` เป็น `.npz` (embeddings + chunks) + ปุ่ม 💾 บันทึกคลัง / 📂 โหลดคลังเดิม (ค่าเริ่มต้น `/content/rag_store.npz`) |
+| 10 | `--n-gpu-layers` เดาจาก `gb_per_layer=0.5` และสมมติ 48 layer | โมเดล 27B offload ผิดสัดส่วน ใช้ VRAM ไม่คุ้ม | อ่าน `<arch>.block_count` จากหัวไฟล์ GGUF จริง (`_gguf_layer_count`) แล้วคำนวณ layer ที่ใส่ GPU ได้ + log ให้เห็น |
+
+### เทสต์ที่เพิ่มในรอบนี้
+- `tools/smoke_test.py` +4 เคส: cache ของ `_dir_stats`, `_gguf_layer_count` (GGUF สังเคราะห์), `StrataRAG.split_chunks` (ความยาว/ลำดับคำ/overlap), dedup + search + save/load
+- `tools/ui_smoke_test.py` (ใหม่): สร้างหน้าจอจริงด้วย ipywidgets แล้วตรวจ 4 แท็บ, ปุ่มครบตามจำนวนโมเดล, **กดรีเฟรชซ้ำแล้ว widget ต้องเป็นตัวเดิม**, ปุ่มโหลด/รัน/ลบเรียกฟังก์ชันถูก, และปุ่มบันทึก/โหลดคลัง RAG เขียน-อ่านไฟล์จริง
+- `test_performance_patterns`: กันไม่ให้ `_refresh` กลับไปสร้าง widget/`rglob` เอง และกันไม่ให้ถอด throttle/`min_score` ออก
+
+---
+
+## 🏗️ แก้แล้วรอบที่ 3 (P3 — โครงสร้าง, dependency, เอกสาร)
+
+| # | ปัญหาเดิม | วิธีแก้ |
+|---|---|---|
+| 1 | โค้ด ~1,400 บรรทัดในเซลล์เดียว แก้/ทดสอบ/debug ยาก | แยกเป็นแพ็กเกจ `strata/`: `config` • `utils` • `bootstrap` • `download` • `server` • `rag` • `ui` • `notebook` (+ `templates/flake.nix`) โดยคงพฤติกรรมเดิมไว้ (แยกด้วย AST จากโค้ดที่เทสต์ผ่านแล้ว) |
+| 2 | `nix.ipynb` หนัก 611 KB (โค้ดจริง ~70 KB ที่เหลือเป็น output + widget state) | notebook เหลือ **4 เซลล์ ~5.5 KB** (intro → setup → launch → คู่มือ) ล้าง output/widget state ทั้งหมด + เทสต์ดักไม่ให้กลับมา |
+| 3 | dependency ลอยตัว (`uv add` ไม่ระบุเวอร์ชัน, `nixpkgs` = nixos-unstable) | `pyproject.toml` ระบุช่วงเวอร์ชันครบ + `uv sync` แทน `uv add`; flake ปักหมุด `NIXPKGS_REV` (nixos-unstable @ 2026-11-11) |
+| 4 | ติดตั้ง Nix ด้วย `curl ... \| sh` | ดาวน์โหลดสคริปต์ → ตรวจเนื้อหา + log `sha256` → รองรับ `NIX_INSTALL_SHA256` บังคับ checksum → ค่อยรันจากไฟล์ |
+| 5 | ลบ `/usr/local/bin/bash`, `/usr/local/bin/sh` ทิ้ง | เปลี่ยนเป็น `symlink` ไป `/bin/bash`, `/bin/sh` (ไม่ทำลาย runtime ของ Colab) |
+| 6 | Dead code (`asyncio`, `TypeVar`, `list_model_files`, `CUSTOM_INCLUDE`, alias `launch_strata`) | ลบออกทั้งหมด + เทสต์ `no dead code` กันกลับมา |
+| 7 | Global state กระจัดกระจาย (`LAST_MODEL_DIR`, `LLAMA_SERVER_PROC`) เสี่ยงกดซ้ำ/สตาร์ทซ้อน | `LLAMA_SERVER_PROC` อยู่ใน `server` เท่านั้น, `last_model_dir` ย้ายเข้า `SPEC_STATE`, เพิ่ม `_SERVER_LOCK` / `_INSTALL_LOCK` (non-blocking → แจ้งเตือนแทนการสตาร์ทซ้อน) |
+| 8 | `import` ทั้งเซลล์ดึง `fastembed`/`pypdf`/`openai` ทันที (ช้าและพังถ้าไม่ติดตั้ง) | import แบบ lazy ในฟังก์ชัน/`TYPE_CHECKING` → `import strata.server` เร็วและไม่ต้องมี heavy deps |
+| 9 | README เป็นแค่ `# Colab` | เขียนใหม่: ฟีเจอร์, quickstart, โครงสร้างโค้ด, ตัวอย่าง API/RAG, ตาราง env var, ข้อกำหนดเครื่อง, การทดสอบ, troubleshooting |
+| 10 | path/พอร์ต hardcode ใน `/content` | override ได้ผ่าน `STRATA_PORT`, `STRATA_HOME`, `STRATA_MODEL_DIR`, `STRATA_DRAFT_DIR`, `STRATA_RAG_STORE`, `STRATA_LOG_FILE` |
+
+### เทสต์หลัง refactor
+- `tools/smoke_test.py` — 16 เคส: โครง notebook (ต้องไม่มี output/state), คอมไพล์ทุกไฟล์ในแพ็กเกจ, f-string safety, public API/catalog, lazy import, รูปแบบโค้ดที่เคยพัง, perf patterns, dead code, quant picker, safe extract, `uv_add`, dir cache, GGUF parser, RAG chunking/dedup/persist, **server lock guard**
+- `tools/ui_smoke_test.py` — import `strata.ui` จริงแล้วสร้าง widget tree, กดรีเฟรชซ้ำ/widget ต้องเป็น object เดิม, กดโหลด/รัน/ลบ, บันทึก-โหลดคลัง RAG
+- `ruff check strata tools` — ผ่านทั้งหมด (E702 ถูก ignore เพราะเป็นโค้ดที่ port มาจาก notebook)
+
+### สิ่งที่ยังไม่ได้ทำ (ตั้งใจ)
+- RAG ยังไม่มี rerank (cross-encoder) และยังไม่อ่าน PDF ที่เป็นภาพสแกน (ต้อง OCR)
+- ยังไม่ได้รัน `Restart & Run All` บน Colab GPU จริงในรอบนี้ (sandbox ไม่มี GPU) — แนะนำรันหนึ่งรอบหลัง merge
+- ยังไม่ได้รัน `ruff format` ทั้งโปรเจกต์ (จะเกิด diff ยักษ์ในโค้ดที่ port มา) — ทำแยกได้เมื่อต้องการ
+
+---
+
+## 📶 เพิ่มเติมตามคำขอ: Network bandwidth (DL/UL)
+
+- `strata/utils.py` — `NetworkMonitor` (คำนวณความเร็วจาก delta ของ `/proc/net/dev`, ทนตัวนับรีเซ็ต), `net_bandwidth()`, `_fmt_rate()` (`812 KB/s`, `4.21 MB/s`)
+- `strata/ui.py` — ชิป ⬇/⬆ ในหัว UI (มี tooltip ยอดรวม) และแผงวัดเรียลไทม์ในแท็บ 1 (ปุ่ม 📶 เปิด/หยุด, thread อัปเดตทุก 1 วิ, ปิดเองเมื่อกดหยุด/kernel ตาย)
+- เทสต์: `tools/smoke_test.py::test_network_monitor` (delta/รีเซ็ต/ฟอร์แมต) และ `tools/ui_smoke_test.py` (ชิปใน header + toggle เปิด/ปิด)
+
+---
+
+## 🔧 แก้เพิ่ม: Colab เปิด notebook เดี่ยว ๆ แล้ว `ModuleNotFoundError: No module named 'strata'`
+
+เดิมทั้งเซลล์รวมโค้ดไว้ในตัว notebook แต่หลังแยกเป็นแพ็กเกจ `strata/` การเปิด notebook จาก GitHub
+ใน Colab จะไม่มีโฟลเดอร์โค้ดอยู่ในเครื่อง (cwd = `/content`) จึง import ไม่เจอ
+
+- เซลล์ 1 มี `_ensure_repo()`: หา `strata/__init__.py` จาก cwd ขึ้นไป ถ้าไม่พบจะ `git clone --depth 1`
+  ไปที่ `/content/Colab` (ลบของค้างก่อน), `chdir` เข้ารากรีโป แล้วจึง import `strata.bootstrap`
+- เพิ่มช่อง `REPO_SLUG` / `REPO_BRANCH` (Colab form) สำหรับ fork หรือทดสอบ branch/PR
+- ถ้า clone แล้วยังไม่เจอ `strata/` (เช่น branch หลักยังไม่ merge) จะได้ error บอกให้ใส่ `REPO_BRANCH`
+- เซลล์ 2 มี guard: ถ้ารันข้ามเซลล์จะบอกให้รันเซลล์ 1 ก่อน
+- เทสต์: `test_notebook_repo_bootstrap` (มีโค้ดอยู่แล้ว / ต้อง clone / ลำดับ fallback / ของค้างถูกลบ / error บอกทางออก)
+
+### v4: fallback ไป branch ของ PR อัตโนมัติ
+อาการจริงที่เจอ: `REPO_BRANCH` ว่าง → clone `main` → `main` ยังไม่มี `strata/` (PR ยังไม่ merge) → `RuntimeError`
+- `_pr_branches()` ถาม `https://api.github.com/repos/{slug}/pulls?state=open` (timeout 10s, ล้มเหลว = เงียบ ๆ ใช้ branch หลัก)
+- `_ensure_repo()` ไล่ลำดับ: branch ที่ผู้ใช้ระบุ → branch หลัก → branch ต้นทางของ PR ที่เปิดอยู่
+  โดยลบโฟลเดอร์ปลายทางก่อน clone ทุกครั้ง และหยุดที่ตัวแรกที่มี `strata/__init__.py`
+- ถ้าทุกตัวไม่มีโค้ด → `RuntimeError` บอกให้ใส่ `REPO_BRANCH`; ทดสอบกับ GitHub จริงแล้วไล่ไปเจอ `arena/e076c6f4-colab` เอง
+- `NOTEBOOK_REV = "v4-pr-fallback"` พิมพ์เป็นบรรทัดแรก เพื่อแยกเซลล์เก่า/ใหม่ได้ทันที
+
+---
+
+## 🐞 P0 (เจอตอนรันบน Colab จริง): `.gitignore` กว้างเกิน ทำ template หายจาก clone
+
+`FileNotFoundError: strata/templates/flake.nix` ตอน `ensure_environment()` — ต้นตอคือ `.gitignore`
+เขียนว่า `flake.nix` (ไม่มี `/` นำหน้า) ซึ่ง match **ทุกไฟล์ชื่อ flake.nix ในทุกโฟลเดอร์**
+รวมถึง template ของแพ็กเกจ → ไฟล์ไม่เคยถูก commit แต่เครื่อง dev มีอยู่ เทสต์เดิมจึงผ่านหมด
+
+- เปลี่ยนเป็น pattern ที่ยึดรากรีโป: `/.venv/`, `/flake.nix`, `/flake.lock`, `/default.nix`, `/requirements.txt`
+- commit `strata/templates/flake.nix` (ไฟล์ที่หายไปตั้งแต่ตอนแยกแพ็กเกจ)
+- เทสต์ใหม่ 2 ตัว:
+  - `package files tracked by git`: ไฟล์ทุกตัวใต้ `strata/` ต้องอยู่ใน `git ls-files` และต้องไม่ถูก `check-ignore` บัง
+  - `flake.nix from template`: อ่าน template ได้จริง + แทน placeholder ครบ + ยังคง `"$@"` ของ `hf download`
+- บทเรียน: เทสต์บนเครื่อง dev ผ่านหมดไม่ได้แปลว่า clone มาจะรันได้ — ต้องมีเทสต์ที่ validated ว่าไฟล์ถูก track
+
+---
+
+## 🩹 P0 (รอบ 2): โค้ดเก่าค้างใน clone เดิม + เทมเพลตหาย
+
+หลังแก้ `.gitignore` แล้ว ผู้ใช้ยังเจอ `FileNotFoundError` เดิม เพราะ `/content/Colab` เป็น clone เก่า
+ที่ยังไม่มีไฟล์นั้น และเซลล์ 1 เวอร์ชันก่อน ๆ ไม่ยอมอัปเดตมัน
+
+- **เทมเพลตย้ายเข้าโค้ด**: `strata/flake_template.py` เก็บ flake เป็นสตริง — ลบโฟลเดอร์ `strata/templates/`
+  ออกทั้งอัน (ไม่มีไฟล์ภายนอกให้หลุด track หรือหายตอน clone อีก), `bootstrap.FLAKE_TEMPLATE` เป็น `str` แล้ว
+- **เซลล์ 1 v6-auto-update**: ถ้ามี `/content/Colab` เป็น git repo → `git fetch --depth 1` + `git reset --hard FETCH_HEAD`
+  ก่อนเสมอ (ref: branch ปัจจุบัน → branch หลัก → branch ของ PR), ปิดได้ด้วย `AUTO_UPDATE=False`
+  แล้วค่อย fallback ไป clone ใหม่ถ้าอัปเดตไม่ได้
+- เทสต์เพิ่ม: ลำดับ ref ของ `_refresh`, กรณี fetch ล้มทุก ref → คืน `False` ให้ไป clone, และ `AUTO_UPDATE=False` ต้องไม่ fetch
+- ทดสอบกับ git จริง (จำลอง clone เก่าโดยลบไฟล์): `🔄 อัปเดตโค้ดเดิมเป็น branch ล่าสุด เรียบร้อย` → ไฟล์กลับมา → `write_flake()` ผ่าน
+
+---
+
+## 🐞 P0 (รอบ 3): `download-deepseek: command not found` ตอนโหลดโมเดล
+
+`download_model_files()` เรียก `download-deepseek` ตรง ๆ ผ่าน `/bin/bash -c` ซึ่งเป็นสคริปต์ที่มาจาก
+`nix develop` devshell — ถ้าเซลล์ 1 ไม่ได้จบ (หรือ PATH ของ devshell หลุด) จะได้ error ของ bash ที่แก้ไม่ได้ด้วยตัวเอง
+
+- `download_command()` เลือกเครื่องมือตามที่หาเจอ: `download-deepseek` → `hf` CLI → `[]`
+- `download_with_module()` ใช้ `huggingface_hub.snapshot_download` (มี `allow_patterns`/`ignore_patterns`)
+  เป็นทางสุดท้ายที่ไม่ต้องพึ่ง PATH — ถ้าไม่มีเลยจะได้ `RuntimeError` ที่บอกให้รัน `ensure_environment()`
+- `huggingface-hub[hf_transfer]` ถูกเพิ่มใน dependency เพื่อให้ทางสำรองนี้มีเสมอ
+- `bootstrap.missing_tools()` ตรวจเครื่องมือ devshell (`uv/hf/download-deepseek/jq/rg/ruff`) แล้ว
+  เตือนตอน `ensure_environment()` พร้อมคืนค่าใน `missing_tools` ของ dict สรุป
+- เทสต์ `downloader fallback`: ลำดับ wrapper → hf → โมดูล, การส่ง pattern, และข้อความ error เมื่อไม่มีอะไรเลย
+
+---
+
+## ✨ ปรับ UX: เดา repo/branch อัตโนมัติ (เซลล์ 1 v8)
+
+ผู้ใช้ไม่ควรต้องพิมพ์ `arena/e076c6f4-colab` เองทุกครั้ง
+
+- `_parse_github_url()` แยก `(owner/repo, branch)` จาก URL ของ Colab (`.../github/OWNER/REPO/blob/<branch>/x.ipynb`)
+  รองรับ branch ที่มี `/`, `%2F` (URL-encode), query string และคืน `("", "")` เมื่อไม่ใช่ลิงก์ GitHub
+- `_detect_source()` ลำดับการเดา: URL ของแท็บ (ผ่าน `google.colab.output.eval_js`) → `git rev-parse --abbrev-ref HEAD`
+  ของ `/content/Colab` หรือ `./Colab` หรือ cwd → ไม่ได้ก็ปล่อยว่าง (แล้วใช้ fallback เดิม: branch หลัก → PR ที่เปิดอยู่)
+- ฟอร์ม: `REPO_SLUG`/`REPO_BRANCH` ปล่อยว่างได้, `DEFAULT_SLUG` เป็นค่าสุดท้าย, พิมพ์ `🌿 ใช้ <slug> @ <branch>` ให้เห็นว่าเลือกอะไร
+- เทสต์ `branch auto-detect`: parse 4 รูปแบบ URL + เคสไม่มี URL (ถอยไปอ่าน git ของ clone)
+- ทดสอบจริง: วาง repo จำลองที่ `content/Colab` แล้วเรียก `_detect_source()` → ได้ `('', 'arena/e076c6f4-colab')`
+
+---
+
+## 🐞 P0 (รอบ 4): `nix develop` exit 1 — flake อยู่ใน git repo
+
+หลังเซลล์ setup `chdir` เข้า `/content/Colab` (ซึ่งเป็น git repo) `write_flake()` จึงเขียน `flake.nix` ที่รากรีโป
+แต่ไฟล์นั้นถูก `.gitignore` ไว้ = **untracked** → Nix มองไม่เห็น (`path ... is not tracked by Git`) และเพราะ
+`activate_devshell()` กลืน stderr ทิ้ง ผู้ใช้จึงเห็นแค่ `exit status 1`
+
+- `FLAKE_DIR = $STRATA_HOME/flake` (นอก repo) — `write_flake()` เขียนที่นั่น, เก็บกวาด `flake.nix`/`default.nix`
+  ที่เคยสร้างใน cwd (เฉพาะไฟล์ที่มี marker `Strata Studio devshell`, ไม่แตะ flake ของผู้ใช้)
+- `activate_devshell()` ใช้ `subprocess.run(capture_output=True)` แล้ว raise ข้อความที่มี **15 บรรทัดท้ายของ stderr**
+  + วิธีแก้ 3 ข้อ; สำเร็จแล้วคืน `{"flake_dir", "vars"}`
+- `nix_diagnostics()` รวม `nix --version`, `experimental-features`, การมี `/nix/store`, ที่อยู่ flake —
+  `ensure_environment()` พิมพ์ให้อัตโนมัติเมื่อ devshell ล้ม และคืน `flake_dir` ใน dict สรุป
+- `config._default_home()`: ใช้ `/content` เมื่อมี (Colab) ไม่งั้น `~/.strata` (เครื่อง dev ไม่ต้องมีสิทธิ์เขียน `/`)
+- เทสต์: `flake lives outside git repo` (เขียนนอก repo + ลบของเดิม + ไม่แตะไฟล์ผู้ใช้), `nix develop error surfacing`
+  (แนบ stderr/hint, merge PATH/env สำเร็จ)
+
+---
+
+## 🐞 P0 (รอบ 5): llama-server ตายเพราะ glibc ของ Nix ชนกับของระบบ
+
+`llama-server` (prebuilt binary) รันด้วย `LD_LIBRARY_PATH` ที่มี `/nix/store/…/glibc-2.44/lib` ต่อท้าย
+→ `libdl.so.2`/`libpthread.so.0` ของ Nix ไปขอ symbol `GLIBC_ABI_DT_X86_64_PLT` จาก `libc.so.6` ของ Ubuntu 22.04 (2.35)
+ที่ไม่มีให้ → `not found` ทุกโหมด fallback
+
+- `sanitize_ld_library_path()` + `server_env()`: ตัด path ใน `/nix/store` ออก, ถอด `LD_PRELOAD` ที่ชี้เข้า store
+  แล้วส่ง `env=server_env()` ให้ `subprocess.Popen`
+- wrapper `/usr/local/bin/llama-server` เวอร์ชันใหม่ (`WRAPPER_REV`) กรอง `/nix/store` ใน bash ด้วย
+  (ใช้ `printf "%s\n"` ก่อน `tr` เพื่อไม่ให้บรรทัดสุดท้ายหายจาก gotcha ของ `read`)
+  และติดตั้งทับ wrapper เก่าอัตโนมัติถ้ายังหาไบนารีเดิมเจอ (ไม่ต้องโหลดซ้ำ)
+- `start_error_hint()` แนบคำใบ้ท้าย error: glibc / CUDA / อื่น ๆ
+- เทสต์: `prebuilt libc isolation (glibc)` — sanitize, server_env, hint และรัน wrapper จริงกับไบนารีปลอม
+  ยืนยันว่า `/nix/store` ไม่อยู่ใน env ของ process ลูกและ `LD_PRELOAD` ถูกถอด
+
+---
+
+## 🐞 P0 (รอบ 6): VRAM ค้าง 14.6/15.0 GB ขณะ server Offline
+
+บน Tesla T4 อาการคือ `start_strata_server` ถูกบังคับ offload ลง RAM เพราะ `vram_free_gb` เหลือ ~0.4 GB
+(เหลือจาก process รอบก่อนที่ตายแต่ยังไม่คืนหน่วยความจำ) → รอโหลดเกิน 240s → ล้มทุก fallback
+
+- `_llama_pids()` + `gpu_memory_users()`: หา process ค้างของโปรเจกต์ และบอกว่าใครถือ VRAM อยู่ (nvidia-smi)
+- `release_gpu_memory(port)`: SIGTERM → SIGKILL ตามลำดับ แล้ว poll จน VRAM คืน (สูงสุด 12s)
+- `start_strata_server()` เรียก preflight นี้เมื่อ `vram_free_gb < 2.0` (ก่อนเลือก quant/คำนวณ `--n-gpu-layers`)
+  และพิมพ์เตือนพร้อมรายชื่อผู้ถือ VRAM + แนะนำ `Runtime → Restart session` ถ้ายังไม่พอ
+- `load_timeout_for(size_gb)`: 240s (≤8GB) → +40s/GB สูงสุด 900s; ใช้ทั้งใน `_spawn` และข้อความ error
+- เตือนเมื่อ `size_gb > vram_free - 2.2` ว่าจะ offload ลง RAM (ช้า)
+- เทสต์ `GPU memory preflight`: parse nvidia-smi/pgrep, SIGTERM pid ค้าง, poll จนได้ VRAM คืน, ช่วง timeout
+
+---
+
+## 🐞 P1: ปุ่มทั้งหมดค้าง disabled  หลังโหลดโมเดลเสร็จ
+
+`_act()` ทำ `for b in btns: b.disabled = True` แล้วใน `finally` ไม่เคยเปิดคืน — หลังกดโหลดครั้งแรก
+ปุ่ม 🔄 รีเฟรช (และปุ่มอื่นบนแถบเครื่องมือ) จึงกดไม่ได้ตลอดไป
+
+- เพิ่ม `_set_busy(flag)` ที่นับซ้อนได้ (`busy["n"]`) แล้วเรียก `_set_busy(False)` ใน `finally` ก่อน `_refresh()`
+  เพื่อให้ `_refresh()` จัดสถานะรายแถว (`📌 เก็บตัวเดียว`/`🗑️ ลบ`) ทับอีกที
+- `🔄 รีเฟรช` ล้าง `_invalidate_dir_cache()` + `_invalidate_server_cache(port)` ก่อนวาดใหม่
+  (เดิมกดรีเฟรชแล้วยังเห็นขนาดไฟล์เก่าจากแคช) และพิมพ์ `🔄 รีเฟรชสถานะโมเดล/ดิสก์แล้ว` ลง log
+- เทสต์ `ui_smoke_test`: กดโหลด → ปุ่มรีเฟรช/ปุ่มแถบเครื่องมือต้องกลับมา `disabled is False`, กดรีเฟรชซ้ำได้
+
+---
+
+## 🐞 P0 (รอบ 7): llama.cpp ถอด `--draft-max` → server ตายทุกโหมด
+
+release ใหม่ตอบกลับ `error while handling argument "--draft-max": the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max`
+และข้อความ "removed" นี้ยังปรากฏใน `--help` ด้วย จึงเช็กแบบ substring ตรง ๆ ไม่ได้ (เดิมใช้ `"--draft-max" in help_txt`)
+
+- `resolve_draft_max_flag(help_txt, kind)`: ถ้า help มีชุด `--spec-*` → เลือก `--spec-ngram-mod-n-max` (n-gram)
+  หรือ `--spec-draft-n-max` (draft/MTP) ตามชนิด; ถ้าไม่มี option ที่ใช้ได้คืน `""` แล้ว *ไม่ใส่ flag* (ปล่อย default)
+  ใช้ regex มี lookaround กัน `--draft` ไป match `--draft-max`
+- `_build_cmd()` ใช้ตัวเลือกนี้ทุกโหมด (mtp / ngram / draft_file / draft_file_mtp) และการ์ด `-ngld` ด้วย `--help`
+- `fallbacks` ต่อท้ายด้วย `"off"`: ถ้า spec ทุกแบบล้ม จะสตาร์ทแบบไม่เปิด speculative เป็นทางออกสุดท้าย
+- `start_error_hint()` รู้จักข้อความ "argument has been removed" และอธิบายว่าอะไรเกิดขึ้น
+- เทสต์ `spec flag compatibility`: help รุ่นใหม่/รุ่นเก่า/ไม่มี option/ไม่มี help + hint
+
+---
+
+## ✨ ฟีเจอร์: UI แสดงผลแบบเรียลไทม์
+
+เดิมต้องกด 🔄 รีเฟรชเองทุกครั้งถึงจะเห็นสถานะ/ขนาดไฟล์/log ใหม่
+
+- `LiveRefresher` (thread daemon, 2s): อัปเดต `header` (ออนไลน์/ดิสก์/VRAM/RAG/⬇⬆) + แผง log ทุก tick,
+  เดิน `_refresh()` ทุก ~6s เพื่อคำนวณขนาดโฟลเดอร์ (ยังใช้ `_dir_stats()` cache)
+- `utils.LOG_RING` (deque 600) + `recent_log(n)`: `run_stream()` เก็บทุกบรรทัดที่พิมพ์ (รวม `$ cmd`/`(exit N)`)
+  ให้ UI หยิบมาแสดงสด; แผงยังแนบท้าย log ของ `llama-server` เมื่อมี
+- `_refresh()` ถูกห่อด้วย `ui_lock` (RLock) กัน thread เรียลไทม์กับ main thread เขียนทับกัน
+- ปุ่ม `⏱ เรียลไทม์: เปิด/ปิด` เปิด-ปิดได้ (`live=False` ตอนสร้าง UI = ไม่สตาร์ท thread, ใช้ในเทสต์)
+  และ `show_model_manager_ui()` คืน root widget กลับมาแล้ว (เดิมคืน `None`)
+- เทสต์ `รีเฟรช UI เรียลไทม์ + log สด`: `run_once()` เดิน tick, log ใหม่โผล่ในแผง, ปุ่มเปิด/ปิดได้จริง
+
+---
+
+## 🐞 P1: `nix: command not found` เมื่อเปิด terminal/shell ใหม่
+
+`ensure_paths()` เติม PATH ให้เฉพาะ process ของ kernel → เปิด terminal ของ Colab (หรือ `!bash -lc`)
+แล้วหา `nix` ไม่เจอ เพราะ `/nix/var/nix/profiles/default/bin` ไม่ได้อยู่ใน PATH ของ shell นั้น
+
+- `persist_shell_env()`: เขียน `/etc/profile.d/strata-nix.sh` + เติม snippet (มี marker กันซ้ำ) ลง `~/.bashrc`
+- `link_nix_binaries()`: symlink `nix`, `nix-store`, `nix-env`, `nix-build`, `nix-shell`, `nix-instantiate`,
+  `nix-channel`, `nix-hash` ไป `/usr/local/bin` (อยู่ใน PATH มาตรฐานของทุก shell)
+- เรียกทั้งคู่ใน `ensure_environment()` หลัง `install_nix()`; คืน `nix_in_path` ใน dict สรุป
+- เทสต์ `shell env persistence`: เขียน/ไม่ซ้ำ/ตรวจ PATH + symlink ชี้ไปไบนารีจริง (ใช้โฟลเดอร์ชั่วคราว)
+
+---
+
+## 🐋 เพิ่ม preset: DeepSeek-V4.1-Flash-1017-abliterated
+
+`orcarouter/DeepSeek-V4.1-Flash-1017-abliterated-GGUF` (ตามที่ผู้ใช้ขอ) — repo มี 2 ชุด shard:
+
+| ชุด | ไฟล์ | ขนาดรวม |
+|---|---|---|
+| `Mix-128G` | 5 shards | ~224.6 GB (ใช้ค่านี้ใน `approx_gb`) |
+| `Mix-256G` | 7 shards | ~346.4 GB |
+| แถม | `mmproj-*BF16.gguf` (~0.9 GB), `mmproj-*F16.gguf`, `imatrix.gguf` | |
+
+- `include`: `["Mix-128G/*", "mmproj-*BF16.gguf"]`, `exclude`: `["imatrix.gguf"]`
+  (ทดสอบกับรายชื่อไฟล์จริงแล้ว: เลือก Mix-128G + mmproj BF16, ข้าม Mix-256G/F16/imatrix)
+- `_pick_main_gguf()` รองรับ sharded GGUF อยู่แล้ว: เลือก `-00001-of-00005` เป็นตัวหลัก,
+  รวมขนาดทุก shard มาคิด VRAM และฟ้องถ้า shard ขาด
+- UI: เปลี่ยนข้อความ "10 Models"/"โหลดครบ 10 ตัว" เป็น `len(ALL_PRESET_KEYS)` (ตอนนี้ 11)
+- เทสต์ `public API / catalog` เข้มขึ้น: key ไม่ซ้ำ, catalog = preset + custom, ตรวจ `approx_gb`/`include`
+  และยืนยัน preset ใหม่ชี้ repo ที่ถูกต้อง + ต้องมี pattern `Mix-128G`
+- ⚠️ ตัวโมเดลใหญ่ 225 GB — Colab ฟรีมีดิสก์ ~110 GB so `download_model_files()` จะปฏิเสธพร้อมบอกขนาดที่ขาด
+
+---
+
+## 🔧 แก้ preset `qwen35-9b-defiant-fable` (repo DavidAU Qwen3.5-9B Defiant Fable)
+
+โมเดลนี้มีอยู่ในแคตตาล็อกแล้ว แต่ `include: ["*Q4_K_M*", "*mmproj-F16*"]` กวาดมาทั้ง
+`...-NEO-MAX-MTP-Q4_K_M.gguf` **และ** `...-NEO-MAX-Q4_K_M.gguf` → เปลืองดิสก์ ~13.8 GB
+และ repo นี้ไม่มีไฟล์ imatrix (มีแค่ mmproj BF16/F16/F32 + plusIQ/TOOLS)
+
+- `include`: `["*-NEO-MAX-MTP-Q4_K_M.gguf", "mmproj-F16.gguf"]`
+- `exclude`: `["*plusIQ*", "mmproj-*F32*", "mmproj-*BF16*"]`
+- `approx_gb`: 7.4 (Q4_K_M MTP 6.98 GB + mmproj F16 0.92 GB), `has_mtp: True`
+- เทสต์ใหม่ `catalog download patterns`: ยืนยันเลือกเฉพาะไฟล์ MTP + mmproj F16 และข้ามรุ่นซ้ำ
+  (รวมถึง preset DeepSeek ที่ต้องเลือกเฉพาะ Mix-128G และไม่โหลด imatrix)
+
+---
+
+## 🧊 เพิ่ม preset: `qwen38-27b-turbo-fable`
+
+`DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF`
+
+repo มี 3 ตระกูลไฟล์ชื่อคล้ายกันมาก: `...-MAX-<q>.gguf` (ไม่มี MTP),
+`...-MAX-MTP-<q>.gguf` และ `...-MAX-LOW-MTP-<q>.gguf`
+
+- `include`: `["*-MAX-MTP-IQ4_XS.gguf", "mmproj-F16.gguf"]` → 16.73 GB จริง
+- `exclude`: `["*LOW-MTP*", "mmproj-*BF16*", "mmproj-*F32*"]` (กัน LOW-MTP 17.0→ ซ้ำ
+  เพราะท้ายชื่อก็เป็น `MTP-IQ4_XS.gguf` เหมือนกัน)
+- `has_mtp: True`, `approx_gb: 16.8`
+- quant อื่นในเรพอ: IQ2_M 12.1, IQ3_M 14.5, Q4_K_M 18.5, Q5_K_M 21.2, Q6_K 24.0, Q8_0 30.2 GB
+  (LOW-MTP: IQ4_XS 15.3, Q6_K 22.4)
+- ⚠️ T4 (VRAM ใช้ได้ ~12.4 GB) → ต้อง offload ลง RAM (มีคำเตือนจาก `start_strata_server`)
+  ถ้าอยากให้พอดี T4 เปลี่ยน include เป็น `*-MAX-MTP-IQ2_M.gguf` (12.1 GB)
+- เทสต์ `catalog download patterns` เพิ่มเคสนี้: ต้องเลือกเฉพาะไฟล์ MTP IQ4_XS, ข้าม LOW-MTP/ไม่มี-MTP/Q8_0
+
+---
+
+## 🎨 imagegen: สร้างภาพด้วย ComfyUI + GGUF (แถวเดียวในแท็บ 1)
+
+โจทย์: ผู้ใช้อยาก "สร้างภาพ" จากโมเดล GGUF — ซึ่งเป็นไปไม่ได้ใน llama.cpp (`mmproj` = vision *input*)
+**ผู้ใช้ยืนยันว่าไม่ต้องการแยกแคตตาล็อก/แท็บ** จึงรวมเข้า `MODEL_CATALOG` เดียวกันด้วย `kind="image"`
+(แถวเดียว ลิสต์เดียว ปุ่มโหลดเหมือนกัน) แต่ตอนรันจะแยกไป ComfyUI เพราะ llama-server รัน diffusion gguf ไม่ได้
+
+- `strata/config.py`: 2 entry `kind="image"` ใน `MODEL_CATALOG` (มี `include` = `targets` = ชื่อไฟล์จริง),
+  `IMAGE_PRESET_KEYS`/`TEXT_PRESET_KEYS` (คำนวณจาก kind), `COMFY_DIR`, `COMFY_PORT=8188`,
+  `COMFY_MODEL_SUBDIRS` — แต่ละ entry มี `targets` = {ไฟล์ในเรพโอ: โฟลเดอร์ย่อยของ ComfyUI}
+  - `qwen-image-21-uncensored` (sdadfas/Qwen-Image-2.1-Uncensored-GGUF): Q4_K_M 4.60 GB +
+    `text_encoders/qwen3vl_8b_int8_convrot.safetensors` 9.35 GB + `vae/qwen_image_2.1_vae_bf16.safetensors` 0.68 GB ≈ 14.6 GB
+  - `flux-3-klein-uncensored` (AtomicChat/FLUX-3-Image-Klein-pup-Uncensored-GGUF): Q5_K_M 6.57 GB + mmproj-F16 0.92 GB ≈ 7.5 GB
+    (เรพนี้ไม่มี VAE/CLIP แยก — ComfyUI อาจต้องใช้ตัวที่มากับ FLUX เอง)
+- `strata/imagegen.py` (ใหม่): `include_patterns`, `comfy_target_path`, `image_model_status`,
+  `link_image_model` (symlink เข้า `ComfyUI/models/<subdir>`, ทำซ้ำได้), `install_image_model`
+  (ใช้ `download_model_files` เดิม → ตรวจดิสก์/รายงาน GB), `ensure_comfyui` (clone ComfyUI + ComfyUI-GGUF,
+  pip install requirements + gguf), `comfyui_command` (listen 0.0.0.0 : 8188, `--lowvram`),
+  `start_comfyui`/`stop_comfyui`/`comfyui_status`, `comfyui_public_url` (Colab `proxyPort`)
+- `strata/ui.py`: ยังมี **4 แท็บเท่าเดิม** — แถวโมเดลภาพในแท็บ 1 ได้ป้าย `🎨 IMAGE`,
+  ปุ่ม `🎨 สร้างภาพ` (แทน `🚀 รัน & แชท`, disable จนกว่าจะโหลดเสร็จ) → `ensure_comfyui()` + `link_image_model()` + `start_comfyui()`;
+  ชื่อแท็บ 1 คำนวณจำนวนจาก `len(ALL_PRESET_KEYS)`
+- `strata/download.py`/`server.py`: `install_model()` ส่งต่อไป `install_image_model()` เมื่อ `kind=image`,
+  `switch_strata_model()` ปฏิเสธพร้อมบอกให้กดปุ่ม `🎨 สร้างภาพ`
+- เทสต์: `image model catalog` (kind/targets/include/subdir/แยก text-image ด้วย `TEXT_PRESET_KEYS`),
+  `comfyui helpers` (คำสั่ง listen/port/lowvram, ตำแหน่ง symlink, ผูกไฟล์ซ้ำได้, สถานะ missing)
+  + ui_smoke ตรวจ 5 แท็บและปุ่มในแท็บ 5
+- เพิ่ม preset ข้อความ: `deepseek-v4-pro-4b-heretic` (Q5_K_M 3.16 GB + mmproj-Q8_0 0.37 GB ≈ 3.5 GB)
+
+---
+
+## 🧯 clone ComfyUI ล้ม (exit 128) → fallback tarball
+
+อาการจากผู้ใช้: `Command 'git clone --depth 1 https://github.com/comfyanonymous/ComfyUI /content/ComfyUI'
+returned non-zero exit status 128` — สาเหตุที่พบบ่อยคือโฟลเดอร์ `/content/ComfyUI` ค้างจากรอบก่อน
+หรือเน็ต Colab สะดุด และ `run_stream` เดิมกลืน stderr เลยไม่รู้ว่าจิทบอกอะไร
+
+- `_run_git()` (ใหม่) รัน `subprocess.run(capture_output=True)` → เก็บ stderr 3 บรรทัดท้ายไว้ในข้อความ error
+  (`... ล้มเหลว (exit 128): <สาเหตุจาก git>`) และปิด prompt  credentials ด้วย `GIT_TERMINAL_PROMPT=0`
+- `_clear_incomplete()` ลบโฟลเดอร์ที่โคลนค้าง (ไม่ว่างแต่ไม่มี `main.py`/`nodes.py`) ก่อนลองใหม่
+- `_clone_or_tarball()` ถ้า clone ไม่ผ่าน → ดาวน์โหลด `https://codeload.github.com/<slug>/tar.gz/refs/heads/{master,main}`
+  แล้วแตกด้วย `tarfile` (ตัดโฟลเดอร์ชั้นบนสุด, ใช้ `filter="data"` บน py3.12) — ผ่าน proxy ของ Colab ได้ชุกกว่า
+- `ensure_comfyui()`: `git pull` ล้มไม่ทำให้ทั้ง flow พัง (ใช้ของเดิมต่อ), ตรวจ custom node ด้วย `nodes.py`
+- เทสต์ `comfyui repo bootstrap`: แตก tarball ตัดชั้นบน, `_run_git` พา stderr จริงมา, `_clear_incomplete` ลบโฟลเดอร์พัง/ว่าง/ไม่มีอยู่
+
+---
+
+## 🌐 ลิงก์ ComfyUI 404 จาก Colab proxy → ตรวจ URL + fallback tunnel
+
+อาการจากผู้ใช้: ComfyUI ขึ้น (`✅ ComfyUI พร้อม`, ผูก 3 ไฟล์) แต่เปิด
+`https://8188-...prod.r.colab.dev` ได้ **HTTP 404** — Colab proxy ไม่ส่งต่อไปพอร์ตให้ในรันนั้น
+
+- `public_url_works(url)` ยิง HTTP GET จริง (timeout 8-12s) ก่อนให้ผู้ใช้เปิด — ไม่เดา
+- `parse_comfy_port()` อ่านพอร์ตจริงจาก `comfyui.log` (`To see the GUI go to: http://...:PORT`)
+  เพราะ ComfyUI จะขยับพอร์ตเองถ้า 8188 ไม่ว่าง (เดิมเรา proxy ผิดพอร์ตโดยไม่รู้)
+- `ensure_public_url(port)`: ลอง Colab proxy → ถ้า 404 และไม่ใช่ localhost จะ
+  `ensure_cloudflared()` (ดาวน์โหลด static binary ~38 MB จาก GitHub) แล้ว
+  `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:PORT` → รอจนได้
+  `https://*.trycloudflare.com` ที่ **ตรวจแล้วว่า 200** (timeout 60s)
+- `start_comfyui(public="auto")` คืน URL ที่ใช้ได้จริง + บอกช่องทาง (Colab proxy / tunnel / localhost)
+  และ `stop_comfyui()` ปิด tunnel ให้ด้วย; UI แสดงลิงก์ `🎨 เปิดหน้า ComfyUI` ในแถบเครื่องมือ
+- เทสต์ `comfyui public url`: parse port, parse trycloudflare URL, `public_url_works` (พอร์ตปิด = False),
+  `ensure_public_url` ในสภาพไม่มี Colab
+
+---
+
+## 🐨 รองรับ Kaggle Notebooks
+
+เดิมโค้ดถือว่าอยู่ Colab เสมอ (`/content`, `google.colab.kernel.proxyPort`) จึงพังบน Kaggle 3 จุด:
+โฟลเดอร์เก็บโมเดล, วิธีเปิด ComfyUI ในเบราว์เซอร์ และเพดานดิสก์ 20 GB ของ `/kaggle/working`
+
+- `strata/platforms.py` (ใหม่): `detect(env=None, exists=None, writable=None)` → `{name, label, home, model_dir,
+  proxy_ports, tunnel_needed, workdir, notes}`; ตรวจ Kaggle จาก env `KAGGLE_*` หรือ `/kaggle/working`
+  และ Colab จาก `COLAB_RELEASE_TAG`/`COLAB_GPU`/`/content`
+- ค่าเริ่มต้น `STRATA_HOME`: Colab `/content` • **Kaggle `/kaggle/temp/strata`** (เลี่ยงลิมิต 20 GB ของ output;
+  ถ้า temp เขียนไม่ได้ถอยไป `/kaggle/working/strata` แล้วค่อย `~/.strata`) • อื่น ๆ `~/.strata` — `STRATA_HOME` ชนะเสมอ
+- `imagegen.ensure_public_url()`: ใช้ proxyPort **เฉพาะ Colab**; Kaggle/local ที่ไม่มี proxy จะข้ามไป
+  `start_tunnel()` (cloudflared) ทันที — `prefer="colab"` บน Kaggle จะได้ error บอกให้ใช้ tunnel; local ใช้ localhost
+- UI: หัวข้อแสดงแพลตฟอร์ม (`🟡 Colab` / `🐨 Kaggle` / `💻 Local`) และ fallback path ของดิสก์ใช้ home ตามแพลตฟอร์ม
+- Notebook `v9-kaggle`: markdown อธิบาย Kaggle, เซลล์ 2 ค้นแพ็กเกจที่ `/kaggle/working/Colab` และพิมพ์
+  `label • home • model_dir` + คำเตือน (เปิด Internet / โมเดลอยู่ temp)
+- เทสต์ `kaggle/colab platform`: home selection + STRATA_HOME override, proxy_ports ต่อแพลตฟอร์ม,
+  `ensure_public_url` บน Kaggle → tunnel, บน local → localhost, `prefer="colab"` บน Kaggle → error ชัดเจน;
+  ui_smoke ตรวจว่า header มีชื่อแพลตฟอร์ม
+
+---
+
+## 🧩 Kaggle "ไม่แสดงผลอะไรเลย" → diagnose + ซ่อมเวอร์ชันวิดเจ็ต + fallback ข้อความ
+
+วิดเจ็ต ipywidgets จะ *ว่างเปล่าโดยไม่มี error* เมื่อเวอร์ชันฝั่ง Python ไม่เข้าคู่กับ frontend
+(Kaggle/Colab มี `jupyterlab_widgets`/`widgetsnbextension` ของตัวเอง) — ผู้ใช้เห็นจอว่างเฉย ๆ
+
+- `widget_plan(versions)`: จับคู่ ipywidgets 8 ↔ `jupyterlab_widgets` 3 / `widgetsnbextension` 4
+  (ipywidgets 7 ↔ 2/3) และคืนรายการที่ต้องติดตั้ง
+- `ensure_widgets()`: ตรวจแล้ว `pip install -q --upgrade` ส่วนที่ขาด (idempotent, ไม่ล้มทั้ง flow)
+- `diagnose()`: ตารางสรุป แพลตฟอร์ม/python/`STRATA_HOME`/MODEL_DIR/พอร์ต/เวอร์ชันวิดเจ็ต/ดิสก์ + คำสั่งแก้
+- `text_dashboard()`: fallback ข้อความล้วน — ตารางโมเดล (ขนาด/สถานะ) + คำสั่ง `install_model`, `get_openai_client`,
+  `start_comfyui` ใช้ได้แม้ widget ใช้ไม่ได้
+- `launch()`: ครอบ `ensure_widgets()` + try/except — ถ้า UI พังจะพิมพ์ error → `diagnose()` → `text_dashboard()`
+  แล้วคืน `None` (ไม่โยน exception ทิ้งผู้ใช้กับจอว่าง)
+- เซลล์ 2 ของ notebook เรียก `diagnose()` ก่อน `launch()` → มี output ให้เห็นเสมอ
+- เทสต์ `widget diagnostics`: pairing 3 เคส, diagnose keys, text dashboard มีโมเดล+คำสั่ง, launch fallback เมื่อ UI ระเบิด
+
+---
+
+## 📌 สรุปสถานะ
+
+P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
+ถูกแก้ครบแล้วใน 3 คอมมิต ส่วนที่เหลือเป็นงานต่อยอด (rerank/OCR, format ทั้งโปรเจกต์, รันจริงบน Colab GPU)
+
+## หมายเหตุการทดสอบ
+- ทดสอบกับ Python 3.11.2 (sandbox): `tools/smoke_test.py` 16/16 ผ่าน, `tools/ui_smoke_test.py` 5/5 ผ่าน, `ruff check` สะอาด
+- ยังไม่ได้รันบน Colab GPU จริง (sandbox ไม่มี GPU) — แนะนำ `Restart & Run All` หนึ่งรอบหลัง merge
