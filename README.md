@@ -221,3 +221,13 @@ MIT
 | ลิงก์ ComfyUI เปิดแล้ว **404 / page can't be found** | Colab proxy ไม่ส่งต่อไปยังพอร์ตให้ (บาง runtime) | เวอร์ชันนี้ตรวจลิงก์ก่อนแสดง (HTTP GET จริง) ถ้าไม่ผ่านจะเปิด **cloudflared quick tunnel** ให้อัตโนมัติ (`https://xxx.trycloudflare.com`) — ดู log บรรทัด `🎨 ComfyUI พร้อมสร้างภาพ` |
 | Kaggle: `Port 8188 is already in use` / ComfyUI ขยับพอร์ต | มีโปรเซสค้างจากรอบก่อน | โค้ดอ่านพอร์ตจริงจาก `comfyui.log` ให้แล้ว — หรือรีสตาร์ท session |
 | Kaggle: โหลดโมเดลไม่ได้ (`Could not resolve host`) | ปิด Internet อยู่ | Settings → Internet → On |
+### 🐨 Kaggle: "ไม่แสดงผลอะไรเลย" (จอว่าง/ไม่มี widget)
+
+| ขั้น | ทำอะไร |
+|---|---|
+| 1 | รัน `from strata.notebook import diagnose; diagnose()` → ดูตาราง: แพลตฟอร์ม / `ipywidgets` / `jupyterlab_widgets` / `widgetsnbextension` / ดิสก์ |
+| 2 | ถ้า `widget_plan` ไม่ว่าง แปลว่าเวอร์ชันไม่เข้าคู่: `%pip install -q ipywidgets>=8.1,<9 jupyterlab_widgets>=3,<4` แล้ว **Restart & Run All** |
+| 3 | ยังว่าง → `from strata.notebook import text_dashboard; text_dashboard()` ได้ตารางโมเดลแบบข้อความ + คำสั่งใช้งาน (ไม่ต้องพึ่ง widget) |
+| 4 | เช็กว่าเซลล์ 1 จบจริง (`✅ สภาพแวดล้อมพร้อม`) และเลือก GPU แล้ว |
+
+> `launch()` รุ่นนี้จะไม่ปล่อยให้จอว่าง: ถ้าสร้าง UI ไม่สำเร็จ จะพิมพ์ `diagnose()` + `text_dashboard()` ให้อัตโนมัติ

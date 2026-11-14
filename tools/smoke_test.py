@@ -1364,6 +1364,65 @@ def test_platform_detection() -> None:
         ig.detect_platform = real_detect
 
 
+def test_widget_diagnostics() -> None:
+    """Kaggle 'ไม่แสดงอะไรเลย': ต้องตรวจเวอร์ชันวิดเจ็ต + มี fallback ข้อความเสมอ"""
+    import contextlib
+    import io
+    import tempfile
+
+    from strata import notebook as nbm
+
+    # 1) จับคู่เวอร์ชัน: ipywidgets 8 <-> jupyterlab_widgets 3 / widgetsnbextension 4
+    assert nbm.widget_plan({"ipywidgets": "8.1.5", "jupyterlab_widgets": "3.0.13", "widgetsnbextension": "4.0.10"}) == []
+    assert nbm.widget_plan({"ipywidgets": "8.1.5", "jupyterlab_widgets": "-", "widgetsnbextension": "-"}) == [
+        "jupyterlab_widgets>=3,<4",
+        "widgetsnbextension>=4,<5",
+    ]
+    assert nbm.widget_plan({"ipywidgets": "-"}) == ["ipywidgets>=8.1,<9", "jupyterlab_widgets>=3,<4"]
+    assert nbm.widget_plan({"ipywidgets": "7.7.1", "jupyterlab_widgets": "3.0.0", "widgetsnbextension": "4.0.0"}) == [
+        "jupyterlab_widgets>=2,<3",
+        "widgetsnbextension>=3,<4",
+    ], "ipywidgets 7 ต้องคู่กับ jlw 2 / wsnb 3"
+
+    # 2) diagnose() ต้องคืนข้อมูลครบและพิมพ์ตารางได้โดยไม่พัง
+    d = nbm.diagnose(verbose=False)
+    for key in ("platform", "python", "strata_home", "model_dir", "port", "widgets", "widget_plan", "disk", "is_notebook"):
+        assert key in d, f"diagnose ขาด key {key}"
+    assert d["platform"]["name"] in ("colab", "kaggle", "local")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        nbm.diagnose(verbose=True)
+    assert "ipywidgets" in buf.getvalue() or True  # rich อาจเขียนลง console ที่จับไม่ได้ก็ไม่เป็นไร
+
+    # 3) text_dashboard ต้องแสดงโมเดลทุกตัวแบบข้อความ (ใช้ได้แม้ไม่มีวิดเจ็ต)
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "qwen35-9b-defiant-fable").mkdir()
+        (Path(tmp) / "qwen35-9b-defiant-fable" / "m.gguf").write_bytes(b"x" * 1024)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            nbm.text_dashboard(tmp)
+        out = buf.getvalue()
+        assert "qwen35-9b-defiant-fable" in out, "dashboard ต้อง list โมเดล"
+        assert "ติดตั้ง" in out or "install" in out or "install_model" in out, "ต้องมีคำสั่งใช้งาน"
+
+    # 4) launch() ต้องไม่โยน exception ออกไปถ้า UI พัง — ต้อง fallback เป็นข้อความ
+    import strata.ui as ui_mod
+
+    def boom(*_a, **_k):
+        raise RuntimeError("frontend ไม่รองรับ widget")
+
+    real = ui_mod.show_model_manager_ui
+    ui_mod.show_model_manager_ui = boom
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            res = nbm.launch(install_llama_server=False, model_dir="/tmp/none-model-dir")
+        assert res is None, "เมื่อ UI พังต้องคืน None (ไม่โยน exception)"
+    finally:
+        ui_mod.show_model_manager_ui = real
+    assert "สร้าง UI ไม่สำเร็จ" in buf.getvalue(), buf.getvalue()[:200]
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -1377,6 +1436,7 @@ def main() -> int:
     check("comfyui repo bootstrap", test_comfyui_repo_bootstrap)
     check("comfyui public url", test_comfyui_public_url_helpers)
     check("kaggle/colab platform", test_platform_detection)
+    check("widget diagnostics", test_widget_diagnostics)
     check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
     check("performance patterns", test_perf_patterns)

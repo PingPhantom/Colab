@@ -415,6 +415,24 @@ returned non-zero exit status 128` — สาเหตุที่พบบ่�
 
 ---
 
+## 🧩 Kaggle "ไม่แสดงผลอะไรเลย" → diagnose + ซ่อมเวอร์ชันวิดเจ็ต + fallback ข้อความ
+
+วิดเจ็ต ipywidgets จะ *ว่างเปล่าโดยไม่มี error* เมื่อเวอร์ชันฝั่ง Python ไม่เข้าคู่กับ frontend
+(Kaggle/Colab มี `jupyterlab_widgets`/`widgetsnbextension` ของตัวเอง) — ผู้ใช้เห็นจอว่างเฉย ๆ
+
+- `widget_plan(versions)`: จับคู่ ipywidgets 8 ↔ `jupyterlab_widgets` 3 / `widgetsnbextension` 4
+  (ipywidgets 7 ↔ 2/3) และคืนรายการที่ต้องติดตั้ง
+- `ensure_widgets()`: ตรวจแล้ว `pip install -q --upgrade` ส่วนที่ขาด (idempotent, ไม่ล้มทั้ง flow)
+- `diagnose()`: ตารางสรุป แพลตฟอร์ม/python/`STRATA_HOME`/MODEL_DIR/พอร์ต/เวอร์ชันวิดเจ็ต/ดิสก์ + คำสั่งแก้
+- `text_dashboard()`: fallback ข้อความล้วน — ตารางโมเดล (ขนาด/สถานะ) + คำสั่ง `install_model`, `get_openai_client`,
+  `start_comfyui` ใช้ได้แม้ widget ใช้ไม่ได้
+- `launch()`: ครอบ `ensure_widgets()` + try/except — ถ้า UI พังจะพิมพ์ error → `diagnose()` → `text_dashboard()`
+  แล้วคืน `None` (ไม่โยน exception ทิ้งผู้ใช้กับจอว่าง)
+- เซลล์ 2 ของ notebook เรียก `diagnose()` ก่อน `launch()` → มี output ให้เห็นเสมอ
+- เทสต์ `widget diagnostics`: pairing 3 เคส, diagnose keys, text dashboard มีโมเดล+คำสั่ง, launch fallback เมื่อ UI ระเบิด
+
+---
+
 ## 📌 สรุปสถานะ
 
 P0 (บั๊กที่ทำให้รันไม่ขึ้น), P1 (ความปลอดภัย), P2 (ประสิทธิภาพ/คุณภาพ RAG) และ P3 (โครงสร้าง/dependency/เอกสาร)
