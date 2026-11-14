@@ -6,6 +6,7 @@ symlink เข้า `ComfyUI/models/...`, ติดตั้ง ComfyUI(+ComfyU
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -31,6 +32,8 @@ GGUF_NODE_REPO = "https://github.com/city96/ComfyUI-GGUF"
 GGUF_NODE_DIRNAME = "ComfyUI-GGUF"
 
 _COMFY_PROC: subprocess.Popen | None = None
+
+_COMFY_LOG: object | None = None  # ไฟล์ log ที่เปิดค้างไว้ตอนสตาร์ท (ปิดตอน stop)
 
 
 # ---------------------------------------------------------------------------
@@ -144,10 +147,18 @@ def ensure_comfyui(pull: bool = True, comfy_dir: str | Path = COMFY_DIR) -> Path
     node = root / "custom_nodes" / GGUF_NODE_DIRNAME
     if not node.is_dir():
         _git(["clone", "--depth", "1", GGUF_NODE_REPO, str(node)])
+    if shutil.which("git") is None:
+        raise RuntimeError("ไม่พบคำสั่ง git — ต้องมี git ก่อนจึงจะติดตั้ง ComfyUI ได้ (Colab มีให้อยู่แล้ว)")
     req = root / "requirements.txt"
-    if req.is_file():
-        run_stream(f"{sys.executable} -m pip install -q -r {req}")
-    run_stream(f"{sys.executable} -m pip install -q gguf")
+    try:
+        if req.is_file():
+            run_stream(f"{sys.executable} -m pip install -q -r {req}")
+        run_stream(f"{sys.executable} -m pip install -q gguf")
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"ติดตั้ง dependency ของ ComfyUI ไม่สำเร็จ (exit {e.returncode}) — "
+            "ลองรัน `%s -m pip install -r %s` เองแล้วดู error แรก" % (sys.executable, req)
+        ) from e
     rprint(f"[bold green]✅ ComfyUI พร้อม[/bold green] ที่ {root}")
     return root
 
@@ -183,11 +194,13 @@ def start_comfyui(port: int = COMFY_PORT, lowvram: bool = True, wait_s: int = 18
     root = Path(comfy_dir)
     if not (root / "main.py").is_file():
         raise FileNotFoundError(f"ยังไม่มี ComfyUI ที่ {root} — เรียก ensure_comfyui() ก่อน")
+    global _COMFY_LOG
     log = root / "comfyui.log"
+    _COMFY_LOG = log.open("w", encoding="utf-8")
     _COMFY_PROC = subprocess.Popen(
         comfyui_command(port, lowvram=lowvram, comfy_dir=root),
         cwd=str(root),
-        stdout=log.open("w", encoding="utf-8"),
+        stdout=_COMFY_LOG,
         stderr=subprocess.STDOUT,
     )
     deadline = time.time() + wait_s
@@ -203,6 +216,14 @@ def start_comfyui(port: int = COMFY_PORT, lowvram: bool = True, wait_s: int = 18
     raise TimeoutError(f"ComfyUI ไม่ขึ้นภายใน {wait_s}s — ดู log ที่ {log}")
 
 
+def _close_comfy_log() -> None:
+    global _COMFY_LOG
+    if _COMFY_LOG is not None:
+        with contextlib.suppress(Exception):
+            _COMFY_LOG.close()  # type: ignore[attr-defined]
+        _COMFY_LOG = None
+
+
 def stop_comfyui() -> bool:
     global _COMFY_PROC
     if _COMFY_PROC is not None and _COMFY_PROC.poll() is None:
@@ -212,6 +233,7 @@ def stop_comfyui() -> bool:
         except subprocess.TimeoutExpired:
             _COMFY_PROC.kill()
         _COMFY_PROC = None
+        _close_comfy_log()
         rprint("[bold yellow]⏹ หยุด ComfyUI แล้ว[/bold yellow]")
         return True
     _COMFY_PROC = None

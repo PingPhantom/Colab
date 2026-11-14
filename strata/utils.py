@@ -32,9 +32,15 @@ def run_quiet(cmd: str):
         print(p.stdout + p.stderr, file=sys.stderr)
         raise subprocess.CalledProcessError(p.returncode, cmd)
 
-def run_stream(cmd: str):
-    _remember(f"$ {cmd}")
-    p = subprocess.Popen(["/bin/bash", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+def run_stream(cmd: str, cwd: str | Path | None = None):
+    """รันคำสั่งแบบสตรีม log — `cwd` ใช้กำหนดโฟลเดอร์ทำงาน (เช่น git ใน repo อื่น)"""
+    where = f" (ใน {cwd})" if cwd else ""
+    _remember(f"$ {cmd}{where}")
+    p = subprocess.Popen(
+        ["/bin/bash", "-c", cmd],
+        cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+    )
     if p.stdout:
         for line in p.stdout:
             _remember(line)

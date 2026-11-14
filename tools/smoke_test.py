@@ -1213,6 +1213,38 @@ def test_imagegen_helpers() -> None:
     assert callable(install_model)
 
 
+def test_run_stream_cwd() -> None:
+    """run_stream ต้องรับ cwd ได้ (ใช้กับ git ใน repo อื่น) และ log บอกโฟลเดอร์"""
+    import contextlib
+    import io
+    import tempfile
+
+    from strata import imagegen as ig
+    from strata.utils import recent_log, run_stream
+
+    with tempfile.TemporaryDirectory() as tmp:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            run_stream("pwd", cwd=tmp)
+        assert Path(tmp).resolve().as_posix() in buf.getvalue(), f"คำสั่งไม่ได้รันใน cwd: {buf.getvalue()!r}"
+        assert any("ใน " + tmp in line for line in recent_log(6)), "log ต้องบอกโฟลเดอร์ที่รัน"
+
+    # imagegen._git ต้องส่ง cwd แบบ keyword ได้โดยไม่ TypeError
+    calls: dict = {}
+    real = ig.run_stream
+
+    def fake(cmd, **kw):
+        calls["cmd"], calls["kw"] = cmd, kw
+
+    ig.run_stream = fake
+    try:
+        ig._git(["pull", "--ff-only"], cwd=Path("/tmp/comfy-test"))
+    finally:
+        ig.run_stream = real
+    assert calls["cmd"].startswith("git pull"), calls
+    assert str(calls["kw"].get("cwd")) == "/tmp/comfy-test", calls
+
+
 def main() -> int:
     print(f"🧪 smoke test: strata/{NOTEBOOK.parent.name} (python {sys.version.split()[0]})")
     check("notebook structure", test_notebook_shape)
@@ -1222,6 +1254,7 @@ def main() -> int:
     check("catalog download patterns", test_catalog_download_patterns)
     check("image model catalog", test_image_catalog)
     check("comfyui helpers", test_imagegen_helpers)
+    check("run_stream cwd", test_run_stream_cwd)
     check("lazy imports", test_lazy_imports)
     check("no known buggy patterns", test_no_buggy_patterns)
     check("performance patterns", test_perf_patterns)
